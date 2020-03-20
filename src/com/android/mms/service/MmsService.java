@@ -91,6 +91,15 @@ public class MmsService extends Service implements MmsRequest.RequestManager {
     // The default number of threads allowed to run MMS requests in each queue
     public static final int THREAD_POOL_SIZE = 4;
 
+    /** Represents the received SMS message for importing. */
+    public static final int SMS_TYPE_INCOMING = 0;
+    /** Represents the sent SMS message for importing. */
+    public static final int SMS_TYPE_OUTGOING = 1;
+    /** Message status property: whether the message has been seen. */
+    public static final String MESSAGE_STATUS_SEEN = "seen";
+    /** Message status property: whether the message has been read. */
+    public static final String MESSAGE_STATUS_READ = "read";
+
     // Pending requests that are waiting for the SIM to be available
     // If a different SIM is currently used by previous requests, the following
     // requests will stay in this queue until that SIM finishes its current requests in
@@ -260,24 +269,6 @@ public class MmsService extends Service implements MmsRequest.RequestManager {
             }
 
             addSimRequest(request);
-        }
-
-        @Override
-        public Bundle getCarrierConfigValues(int subId) {
-            LogUtil.d("getCarrierConfigValues");
-            // Make sure the subId is correct
-            if (!SubscriptionManager.isValidSubscriptionId(subId)) {
-                LogUtil.e("Invalid subId " + subId);
-                return new Bundle();
-            }
-            if (subId == SubscriptionManager.DEFAULT_SUBSCRIPTION_ID) {
-                subId = SubscriptionManager.getDefaultSmsSubscriptionId();
-            }
-            final Bundle mmsConfig = MmsConfigManager.getInstance().getMmsConfigBySubId(subId);
-            if (mmsConfig == null) {
-                return new Bundle();
-            }
-            return mmsConfig;
         }
 
         @Override
@@ -578,11 +569,11 @@ public class MmsService extends Service implements MmsRequest.RequestManager {
             boolean seen, boolean read, String creator) {
         Uri insertUri = null;
         switch (type) {
-            case SmsManager.SMS_TYPE_INCOMING:
+            case SMS_TYPE_INCOMING:
                 insertUri = Telephony.Sms.Inbox.CONTENT_URI;
 
                 break;
-            case SmsManager.SMS_TYPE_OUTGOING:
+            case SMS_TYPE_OUTGOING:
                 insertUri = Telephony.Sms.Sent.CONTENT_URI;
                 break;
         }
@@ -702,14 +693,14 @@ public class MmsService extends Service implements MmsRequest.RequestManager {
             return false;
         }
         final ContentValues values = new ContentValues();
-        if (statusValues.containsKey(SmsManager.MESSAGE_STATUS_READ)) {
-            final Integer val = statusValues.getAsInteger(SmsManager.MESSAGE_STATUS_READ);
+        if (statusValues.containsKey(MESSAGE_STATUS_READ)) {
+            final Integer val = statusValues.getAsInteger(MESSAGE_STATUS_READ);
             if (val != null) {
                 // MMS uses the same column name
                 values.put(Telephony.Sms.READ, val);
             }
-        } else if (statusValues.containsKey(SmsManager.MESSAGE_STATUS_SEEN)) {
-            final Integer val = statusValues.getAsInteger(SmsManager.MESSAGE_STATUS_SEEN);
+        } else if (statusValues.containsKey(MESSAGE_STATUS_SEEN)) {
+            final Integer val = statusValues.getAsInteger(MESSAGE_STATUS_SEEN);
             if (val != null) {
                 // MMS uses the same column name
                 values.put(Telephony.Sms.SEEN, val);
