@@ -34,13 +34,14 @@ public class PhoneUtils {
      * Get a canonical national format phone number. If parsing fails, just return the
      * original number.
      *
-     * @param telephonyManager TelephonyManager instance for the subscription for which the method
-     * is called
+     * @param telephonyManager
+     * @param subId The SIM ID associated with this number
      * @param phoneText The input phone number text
      * @return The formatted number or the original phone number if failed to parse
      */
-    public static String getNationalNumber(TelephonyManager telephonyManager, String phoneText) {
-        final String country = getSimOrDefaultLocaleCountry(telephonyManager);
+    public static String getNationalNumber(TelephonyManager telephonyManager, int subId,
+            String phoneText) {
+        final String country = getSimOrDefaultLocaleCountry(telephonyManager, subId);
         final PhoneNumberUtil phoneNumberUtil = PhoneNumberUtil.getInstance();
         final Phonenumber.PhoneNumber parsed = getParsedNumber(phoneNumberUtil, phoneText, country);
         if (parsed == null) {
@@ -70,8 +71,9 @@ public class PhoneUtils {
     }
 
     // Get the country/region either from the SIM ID or from locale
-    private static String getSimOrDefaultLocaleCountry(TelephonyManager telephonyManager) {
-        String country = getSimCountry(telephonyManager);
+    private static String getSimOrDefaultLocaleCountry(TelephonyManager telephonyManager,
+            int subId) {
+        String country = getSimCountry(telephonyManager, subId);
         if (TextUtils.isEmpty(country)) {
             country = Locale.getDefault().getCountry();
         }
@@ -80,8 +82,8 @@ public class PhoneUtils {
     }
 
     // Get country/region from SIM ID
-    private static String getSimCountry(TelephonyManager telephonyManager) {
-        final String country = telephonyManager.getSimCountryIso();
+    private static String getSimCountry(TelephonyManager telephonyManager, int subId) {
+        final String country = telephonyManager.getSimCountryIso(subId);
         if (TextUtils.isEmpty(country)) {
             return null;
         }

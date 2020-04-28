@@ -473,26 +473,46 @@ public class MmsHttpClient {
      */
     private static String getMacroValue(Context context, String macro, Bundle mmsConfig,
             int subId) {
-        final TelephonyManager telephonyManager = ((TelephonyManager) context.getSystemService(
-            Context.TELEPHONY_SERVICE)).createForSubscriptionId(subId);
         if (MACRO_LINE1.equals(macro)) {
-            return telephonyManager.getLine1Number();
+            return getLine1(context, subId);
         } else if (MACRO_LINE1NOCOUNTRYCODE.equals(macro)) {
-            return PhoneUtils.getNationalNumber(telephonyManager,
-                telephonyManager.getLine1Number());
+            return getLine1NoCountryCode(context, subId);
         } else if (MACRO_NAI.equals(macro)) {
-            return getNai(telephonyManager, mmsConfig);
+            return getNai(context, mmsConfig, subId);
         }
         LogUtil.e("Invalid macro " + macro);
         return null;
     }
 
     /**
+     * Returns the phone number for the given subscription ID.
+     */
+    private static String getLine1(Context context, int subId) {
+        final TelephonyManager telephonyManager = (TelephonyManager) context.getSystemService(
+                Context.TELEPHONY_SERVICE);
+        return telephonyManager.getLine1Number(subId);
+    }
+
+    /**
+     * Returns the phone number (without country code) for the given subscription ID.
+     */
+    private static String getLine1NoCountryCode(Context context, int subId) {
+        final TelephonyManager telephonyManager = (TelephonyManager) context.getSystemService(
+                Context.TELEPHONY_SERVICE);
+        return PhoneUtils.getNationalNumber(
+                telephonyManager,
+                subId,
+                telephonyManager.getLine1Number(subId));
+    }
+
+    /**
      * Returns the NAI (Network Access Identifier) from SystemProperties for the given subscription
      * ID.
      */
-    private static String getNai(TelephonyManager telephonyManager, Bundle mmsConfig) {
-        String nai = telephonyManager.getNai();
+    private static String getNai(Context context, Bundle mmsConfig, int subId) {
+        final TelephonyManager telephonyManager = (TelephonyManager) context.getSystemService(
+                Context.TELEPHONY_SERVICE);
+        String nai = telephonyManager.getNai(SubscriptionManager.getSlotIndex(subId));
         if (LogUtil.isLoggable(Log.VERBOSE)) {
             LogUtil.v("getNai: nai=" + nai);
         }
