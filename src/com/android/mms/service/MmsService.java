@@ -39,8 +39,10 @@ import android.os.RemoteException;
 import android.os.UserHandle;
 import android.provider.Settings;
 import android.provider.Telephony;
+import android.security.NetworkSecurityPolicy;
 import android.service.carrier.CarrierMessagingService;
 import android.telephony.SmsManager;
+import android.telephony.SubscriptionInfo;
 import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
 import android.telephony.data.ApnSetting;
@@ -62,7 +64,10 @@ import com.google.android.mms.util.SqliteWrapper;
 
 import java.io.IOException;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.Callable;
@@ -70,6 +75,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * System service to process MMS API requests
@@ -180,8 +187,9 @@ public class MmsService extends Service implements MmsRequest.RequestManager {
     private IMms.Stub mStub = new IMms.Stub() {
         @Override
         public void sendMessage(int subId, String callingPkg, Uri contentUri,
-                String locationUrl, Bundle configOverrides, PendingIntent sentIntent) {
-            LogUtil.d("sendMessage");
+                String locationUrl, Bundle configOverrides, PendingIntent sentIntent,
+                long messageId) {
+            LogUtil.d("sendMessage messageId: " + messageId);
             enforceSystemUid();
 
             // Make sure the subId is correct
@@ -201,7 +209,8 @@ public class MmsService extends Service implements MmsRequest.RequestManager {
             }
 
             final SendRequest request = new SendRequest(MmsService.this, subId, contentUri,
-                    locationUrl, sentIntent, callingPkg, configOverrides, MmsService.this);
+                    locationUrl, sentIntent, callingPkg, configOverrides, MmsService.this,
+                    messageId);
 
             final String carrierMessagingServicePackage =
                     getCarrierMessagingServicePackageIfExists(subId);
@@ -231,11 +240,12 @@ public class MmsService extends Service implements MmsRequest.RequestManager {
         @Override
         public void downloadMessage(int subId, String callingPkg, String locationUrl,
                 Uri contentUri, Bundle configOverrides,
-                PendingIntent downloadedIntent) {
+                PendingIntent downloadedIntent, long messageId) {
             // If the subId is no longer active it could be caused by an MVNO using multiple
             // subIds, so we should try to download anyway.
             // TODO: Fail fast when downloading will fail (i.e. SIM swapped)
-            LogUtil.d("downloadMessage: " + MmsHttpClient.redactUrlForNonVerbose(locationUrl));
+            LogUtil.d("downloadMessage: " + MmsHttpClient.redactUrlForNonVerbose(locationUrl) +
+                    ", messageId: " + messageId);
 
             enforceSystemUid();
 
@@ -249,8 +259,27 @@ public class MmsService extends Service implements MmsRequest.RequestManager {
                 subId = SubscriptionManager.getDefaultSmsSubscriptionId();
             }
 
+            if (!isActiveSubId(subId)) {
+                List<SubscriptionInfo> activeSubList = getActiveSubscriptionsInGroup(subId);
+                if (activeSubList.isEmpty()) {
+                    sendErrorInPendingIntent(downloadedIntent);
+                    return;
+                }
+
+                subId = activeSubList.get(0).getSubscriptionId();
+                int defaultSmsSubId = SubscriptionManager.getDefaultSmsSubscriptionId();
+                // If we have default sms subscription, prefer to use that. Otherwise, use first
+                // subscription
+                for (SubscriptionInfo subInfo : activeSubList) {
+                    if (subInfo.getSubscriptionId() == defaultSmsSubId) {
+                        subId = subInfo.getSubscriptionId();
+                    }
+                }
+            }
+
             final DownloadRequest request = new DownloadRequest(MmsService.this, subId, locationUrl,
-                    contentUri, downloadedIntent, callingPkg, configOverrides, MmsService.this);
+                    contentUri, downloadedIntent, callingPkg, configOverrides, MmsService.this,
+                    messageId);
 
             final String carrierMessagingServicePackage =
                     getCarrierMessagingServicePackageIfExists(subId);
@@ -269,6 +298,48 @@ public class MmsService extends Service implements MmsRequest.RequestManager {
             }
 
             addSimRequest(request);
+        }
+
+        private List<SubscriptionInfo> getActiveSubscriptionsInGroup(int subId) {
+            SubscriptionManager subManager =
+                    (SubscriptionManager) getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE);
+
+            if (subManager == null) {
+                return Collections.emptyList();
+            }
+
+            List<SubscriptionInfo> subList = subManager.getAvailableSubscriptionInfoList();
+
+            if (subList == null) {
+                return Collections.emptyList();
+            }
+
+            SubscriptionInfo subscriptionInfo = null;
+            for (SubscriptionInfo subInfo : subList) {
+                if (subInfo.getSubscriptionId() == subId) {
+                    subscriptionInfo = subInfo;
+                    break;
+                }
+            }
+
+            if (subscriptionInfo == null) {
+                return Collections.emptyList();
+            }
+
+            if (subscriptionInfo.getGroupUuid() == null) {
+                return Collections.emptyList();
+            }
+
+            List<SubscriptionInfo> subscriptionInGroupList =
+                    subManager.getSubscriptionsInGroup(subscriptionInfo.getGroupUuid());
+
+            // the list is sorted by isOpportunistic and isOpportunistic == false will have higher
+            // priority
+            return subscriptionInGroupList.stream()
+                    .filter(info ->
+                            info.getSimSlotIndex() != SubscriptionManager.INVALID_SIM_SLOT_INDEX)
+                    .sorted(Comparator.comparing(SubscriptionInfo::isOpportunistic))
+                    .collect(Collectors.toList());
         }
 
         @Override
@@ -546,6 +617,9 @@ public class MmsService extends Service implements MmsRequest.RequestManager {
         LogUtil.d("onCreate");
         // Load mms_config
         MmsConfigManager.getInstance().init(this);
+
+        NetworkSecurityPolicy.getInstance().setCleartextTrafficPermitted(true);
+
         // Initialize running request state
         for (int i = 0; i < mRunningRequestExecutors.length; i++) {
             mRunningRequestExecutors[i] = Executors.newFixedThreadPool(THREAD_POOL_SIZE);
