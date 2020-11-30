@@ -23,7 +23,7 @@ import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
 import android.service.carrier.CarrierMessagingService;
-import android.service.carrier.CarrierMessagingServiceWrapper.CarrierMessagingCallbackWrapper;
+import android.service.carrier.CarrierMessagingServiceWrapper.CarrierMessagingCallback;
 import android.telephony.SmsManager;
 import android.telephony.TelephonyManager;
 import android.text.TextUtils;
@@ -152,6 +152,7 @@ public abstract class MmsRequest {
             long retryDelaySecs = 2;
             // Try multiple times of MMS HTTP request, depending on the error.
             for (int i = 0; i < RETRY_TIMES; i++) {
+                httpStatusCode = 0; // Clear for retry.
                 try {
                     networkManager.acquireNetwork(requestId);
                     final String apnName = networkManager.getApnName();
@@ -176,7 +177,9 @@ public abstract class MmsRequest {
                         // Success
                         break;
                     } finally {
-                        networkManager.releaseNetwork(requestId, this instanceof DownloadRequest);
+                        // Release the MMS network immediately except successful DownloadRequest.
+                        networkManager.releaseNetwork(requestId,
+                                this instanceof DownloadRequest && result == Activity.RESULT_OK);
                     }
                 } catch (ApnException e) {
                     LogUtil.e(requestId, "APN failure", e);
@@ -219,10 +222,10 @@ public abstract class MmsRequest {
         final String requestId = this.getRequestId();
         // As noted in the @param comment above, the httpStatusCode is only set when there's
         // an http failure. On success, such as an http code of 200, the value here will be 0.
-        // It's disconcerting in the log to see httpStatusCode: 0 when the mms succeeded. That
-        // is why an httpStatusCode of zero is now reported in the log as "success".
-        LogUtil.i(requestId, "processResult: " + result + ", httpStatusCode: "
-                + (httpStatusCode != 0 ? httpStatusCode : "success (0)"));
+        // "httpStatusCode: xxx" is now reported for an http failure only.
+        LogUtil.i(requestId, "processResult: "
+                + (result == Activity.RESULT_OK ? "success" : "failure(" + result + ")")
+                + (httpStatusCode != 0 ? ", httpStatusCode: " + httpStatusCode : ""));
 
         // Return MMS HTTP request result via PendingIntent
         final PendingIntent pendingIntent = getPendingIntent();
@@ -353,7 +356,7 @@ public abstract class MmsRequest {
     /**
      * Base class for handling carrier app send / download result.
      */
-    protected abstract class CarrierMmsActionCallback extends CarrierMessagingCallbackWrapper {
+    protected abstract class CarrierMmsActionCallback implements CarrierMessagingCallback {
         @Override
         public void onSendSmsComplete(int result, int messageRef) {
             LogUtil.e("Unexpected onSendSmsComplete call for messageId " + mMessageId
