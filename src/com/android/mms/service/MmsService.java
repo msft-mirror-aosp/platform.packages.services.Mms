@@ -207,14 +207,14 @@ public class MmsService extends Service implements MmsRequest.RequestManager {
         @Override
         public void sendMessage(int subId, String callingPkg, Uri contentUri,
                 String locationUrl, Bundle configOverrides, PendingIntent sentIntent,
-                long messageId) {
+                long messageId, String attributionTag) {
             LogUtil.d("sendMessage " + formatCrossStackMessageId(messageId));
             enforceSystemUid();
 
             // Make sure the subId is correct
             if (!SubscriptionManager.isValidSubscriptionId(subId)) {
                 LogUtil.e("Invalid subId " + subId);
-                sendErrorInPendingIntent(sentIntent, SmsManager.MMS_ERROR_NO_DATA_NETWORK);
+                sendErrorInPendingIntent(sentIntent, SmsManager.MMS_ERROR_INVALID_SUBSCRIPTION_ID);
                 return;
             }
             if (subId == SubscriptionManager.DEFAULT_SUBSCRIPTION_ID) {
@@ -223,7 +223,7 @@ public class MmsService extends Service implements MmsRequest.RequestManager {
 
             // Make sure the subId is active
             if (!isActiveSubId(subId)) {
-                sendErrorInPendingIntent(sentIntent, SmsManager.MMS_ERROR_NO_DATA_NETWORK);
+                sendErrorInPendingIntent(sentIntent, SmsManager.MMS_ERROR_INACTIVE_SUBSCRIPTION);
                 return;
             }
 
@@ -278,8 +278,8 @@ public class MmsService extends Service implements MmsRequest.RequestManager {
 
         @Override
         public void downloadMessage(int subId, String callingPkg, String locationUrl,
-                Uri contentUri, Bundle configOverrides,
-                PendingIntent downloadedIntent, long messageId) {
+                Uri contentUri, Bundle configOverrides, PendingIntent downloadedIntent,
+                long messageId, String attributionTag) {
             // If the subId is no longer active it could be caused by an MVNO using multiple
             // subIds, so we should try to download anyway.
             // TODO: Fail fast when downloading will fail (i.e. SIM swapped)
@@ -291,7 +291,8 @@ public class MmsService extends Service implements MmsRequest.RequestManager {
             // Make sure the subId is correct
             if (!SubscriptionManager.isValidSubscriptionId(subId)) {
                 LogUtil.e("Invalid subId " + subId);
-                sendErrorInPendingIntent(downloadedIntent, SmsManager.MMS_ERROR_NO_DATA_NETWORK);
+                sendErrorInPendingIntent(downloadedIntent,
+                        SmsManager.MMS_ERROR_INVALID_SUBSCRIPTION_ID);
                 return;
             }
             if (subId == SubscriptionManager.DEFAULT_SUBSCRIPTION_ID) {
@@ -301,8 +302,8 @@ public class MmsService extends Service implements MmsRequest.RequestManager {
             if (!isActiveSubId(subId)) {
                 List<SubscriptionInfo> activeSubList = getActiveSubscriptionsInGroup(subId);
                 if (activeSubList.isEmpty()) {
-                    sendErrorInPendingIntent(
-                            downloadedIntent, SmsManager.MMS_ERROR_NO_DATA_NETWORK);
+                    sendErrorInPendingIntent(downloadedIntent,
+                            SmsManager.MMS_ERROR_INACTIVE_SUBSCRIPTION);
                     return;
                 }
 
@@ -356,7 +357,7 @@ public class MmsService extends Service implements MmsRequest.RequestManager {
             // Make sure subId has MMS data
             if (!getTelephonyManager(subId).isDataEnabledForApn(ApnSetting.TYPE_MMS)) {
                 sendSettingsIntentForFailedMms(/*isIncoming=*/ true, subId);
-                sendErrorInPendingIntent(downloadedIntent, SmsManager.MMS_ERROR_NO_DATA_NETWORK);
+                sendErrorInPendingIntent(downloadedIntent, SmsManager.MMS_ERROR_DATA_DISABLED);
                 return;
             }
 
