@@ -264,7 +264,7 @@ public class MmsService extends Service implements MmsRequest.RequestManager {
 
             final SendRequest request = new SendRequest(MmsService.this, subId, contentUri,
                     locationUrl, sentIntent, callingPkg, mmsConfig, MmsService.this,
-                    messageId, mmsStats);
+                    messageId, mmsStats, getTelephonyManager(subId));
 
             final String carrierMessagingServicePackage =
                     getCarrierMessagingServicePackageIfExists(subId);
@@ -366,7 +366,7 @@ public class MmsService extends Service implements MmsRequest.RequestManager {
 
             final DownloadRequest request = new DownloadRequest(MmsService.this, subId, locationUrl,
                     contentUri, downloadedIntent, callingPkg, mmsConfig, MmsService.this,
-                    messageId, mmsStats);
+                    messageId, mmsStats, getTelephonyManager(subId));
 
             final String carrierMessagingServicePackage =
                     getCarrierMessagingServicePackageIfExists(subId);
@@ -621,6 +621,7 @@ public class MmsService extends Service implements MmsRequest.RequestManager {
         LogUtil.d("Current running=" + mRunningRequestCount + ", "
                 + "current subId=" + mCurrentSubId + ", "
                 + "pending=" + mPendingSimRequestQueue.size());
+
         synchronized (this) {
             if (mPendingSimRequestQueue.size() > 0 ||
                     (mRunningRequestCount > 0 && request.getSubId() != mCurrentSubId)) {

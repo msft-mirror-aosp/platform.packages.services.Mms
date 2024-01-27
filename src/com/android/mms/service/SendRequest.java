@@ -35,6 +35,7 @@ import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
 import android.text.TextUtils;
 
+import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.telephony.SmsApplication;
 import com.android.internal.telephony.SmsNumberUtils;
 import com.android.mms.service.exception.MmsHttpException;
@@ -56,14 +57,16 @@ import com.google.android.mms.util.SqliteWrapper;
  */
 public class SendRequest extends MmsRequest {
     private final Uri mPduUri;
-    private byte[] mPduData;
+    @VisibleForTesting
+    public byte[] mPduData;
     private final String mLocationUrl;
     private final PendingIntent mSentIntent;
 
     public SendRequest(RequestManager manager, int subId, Uri contentUri, String locationUrl,
             PendingIntent sentIntent, String creator, Bundle configOverrides, Context context,
-            long messageId, MmsStats mmsStats) {
-        super(manager, subId, creator, configOverrides, context, messageId, mmsStats);
+            long messageId, MmsStats mmsStats, TelephonyManager telephonyManager) {
+        super(manager, subId, creator, configOverrides, context, messageId, mmsStats,
+                telephonyManager);
         mPduUri = contentUri;
         mPduData = null;
         mLocationUrl = locationUrl;
@@ -498,5 +501,12 @@ public class SendRequest extends MmsRequest {
                     + MmsService.formatCrossStackMessageId(mMessageId)
                     + " with result: " + result);
         }
+    }
+
+    protected long getPayloadSize() {
+        if (mPduData == null) {
+            return 0;
+        }
+        return mPduData.length;
     }
 }
