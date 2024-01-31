@@ -207,8 +207,9 @@ public abstract class MmsRequest {
                                 + apnName + ", try with no name");
                         apn = ApnSettings.load(context, null, mSubId, requestId);
                     }
-                    LogUtil.i(requestId, "Using " + apn.toString());
-                    if (Flags.oemEnabledSatelliteFlag() && !canTransferPayloadOnCurrentNetwork()) {
+                    LogUtil.d(requestId, "Using " + apn.toString());
+                    if (Flags.carrierEnabledSatelliteFlag()
+                            && !canTransferPayloadOnCurrentNetwork()) {
                         LogUtil.e(requestId, "PDU too large for satellite");
                         result = SmsManager.MMS_ERROR_TOO_LARGE_FOR_TRANSPORT;
                         break;
@@ -588,6 +589,7 @@ public abstract class MmsRequest {
         if (serviceState == null) {
             // serviceState can be null when the subscription is inactive
             // or when there was an error communicating with the phone process.
+            LogUtil.d("canTransferPayloadOnCurrentNetwork serviceState null");
             return true;    // assume we're not connected to a satellite
         }
         LogUtil.d("canTransferPayloadOnCurrentNetwork onSatellite: "
@@ -602,5 +604,4 @@ public abstract class MmsRequest {
                 + " maxPduSize: " + maxPduSize);
         return payloadSize > 0 && payloadSize <= maxPduSize;
     }
-
 }
