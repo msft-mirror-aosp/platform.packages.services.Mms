@@ -33,13 +33,11 @@ import android.os.Message;
 import android.os.PersistableBundle;
 import android.provider.DeviceConfig;
 import android.telephony.CarrierConfigManager;
-import android.telephony.ServiceState;
 import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.telephony.PhoneConstants;
-import com.android.internal.telephony.flags.Flags;
 import com.android.mms.service.exception.MmsNetworkException;
 
 /**
@@ -326,32 +324,12 @@ public class MmsNetworkManager {
         mMmsHttpClient = null;
         mSubId = subId;
         mReleaseHandler = new Handler(Looper.getMainLooper());
-
-        TelephonyManager telephonyManager = mContext.getSystemService(TelephonyManager.class);
-        ServiceState serviceState = null;
-        if (telephonyManager != null) {
-            serviceState = telephonyManager.getServiceState();
-        }
-
-        // During Satellite network , network available is Satellite transport with restricted
-        // capability only . So build mms message network request with related capability
-        if (Flags.carrierEnabledSatelliteFlag()
-                && serviceState != null && serviceState.isUsingNonTerrestrialNetwork()) {
-            mNetworkRequest = new NetworkRequest.Builder()
-                    .addTransportType(NetworkCapabilities.TRANSPORT_SATELLITE)
-                    .addCapability(NetworkCapabilities.NET_CAPABILITY_MMS)
-                    .removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)
-                    .setNetworkSpecifier(new TelephonyNetworkSpecifier.Builder()
-                            .setSubscriptionId(mSubId).build())
-                    .build();
-         } else {
-            mNetworkRequest = new NetworkRequest.Builder()
-                    .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
-                    .addCapability(NetworkCapabilities.NET_CAPABILITY_MMS)
-                    .setNetworkSpecifier(new TelephonyNetworkSpecifier.Builder()
-                            .setSubscriptionId(mSubId).build())
-                    .build();
-        }
+        mNetworkRequest = new NetworkRequest.Builder()
+                .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_MMS)
+                .setNetworkSpecifier(new TelephonyNetworkSpecifier.Builder()
+                        .setSubscriptionId(mSubId).build())
+                .build();
 
         mNetworkReleaseTask = new Runnable() {
             @Override
