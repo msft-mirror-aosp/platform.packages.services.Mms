@@ -26,14 +26,13 @@ import android.util.StatsEvent;
 
 import androidx.annotation.VisibleForTesting;
 
+import com.android.internal.util.ConcurrentUtils;
 import com.android.mms.IncomingMms;
 import com.android.mms.MmsStatsLog;
 import com.android.mms.OutgoingMms;
-import com.android.internal.util.ConcurrentUtils;
 
 import java.time.Duration;
 import java.util.List;
-import java.util.concurrent.Executor;
 
 /**
  * Implements statsd pullers for Mms.
@@ -91,7 +90,8 @@ public class MmsMetricsCollector implements StatsManager.StatsPullAtomCallback {
                 mms.getMmsCount(),
                 mms.getRetryId(),
                 mms.getHandledByCarrierApp(),
-                mms.getIsManagedProfile());
+                mms.getIsManagedProfile(),
+                mms.getIsNtn());
     }
 
     private static StatsEvent buildStatsEvent(OutgoingMms mms) {
@@ -109,7 +109,8 @@ public class MmsMetricsCollector implements StatsManager.StatsPullAtomCallback {
                 mms.getIsFromDefaultApp(),
                 mms.getRetryId(),
                 mms.getHandledByCarrierApp(),
-                mms.getIsManagedProfile());
+                mms.getIsManagedProfile(),
+                mms.getIsNtn());
     }
 
     @Override
