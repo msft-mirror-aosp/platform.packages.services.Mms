@@ -25,6 +25,7 @@ import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 
@@ -34,13 +35,13 @@ import android.telephony.ServiceState;
 import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
 
+import com.android.internal.telephony.flags.Flags;
 import com.android.mms.IncomingMms;
 import com.android.mms.OutgoingMms;
 
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
-
 import org.mockito.ArgumentCaptor;
 
 public class MmsStatsTest {
@@ -92,6 +93,7 @@ public class MmsStatsTest {
         assertThat(incomingMms.getRetryId()).isEqualTo(0);
         assertThat(incomingMms.getHandledByCarrierApp()).isEqualTo(false);
         assertThat(incomingMms.getIsManagedProfile()).isEqualTo(false);
+        assertThat(incomingMms.getIsNtn()).isEqualTo(false);
         verifyNoMoreInteractions(mPersistMmsAtomsStorage);
     }
 
@@ -120,6 +122,7 @@ public class MmsStatsTest {
         assertThat(outgoingMms.getHandledByCarrierApp()).isEqualTo(false);
         assertThat(outgoingMms.getIsFromDefaultApp()).isEqualTo(false);
         assertThat(outgoingMms.getIsManagedProfile()).isEqualTo(false);
+        assertThat(outgoingMms.getIsNtn()).isEqualTo(false);
         verifyNoMoreInteractions(mPersistMmsAtomsStorage);
     }
 
@@ -150,5 +153,56 @@ public class MmsStatsTest {
 
         // getSubscriptionUserHandle should not be called if subID is inactive.
         verify(mSubscriptionManager, never()).getSubscriptionUserHandle(eq(inactiveSubId));
+    }
+
+    @Test
+    public void testIsNtn_serviceState_notNull() {
+        if (!Flags.carrierEnabledSatelliteFlag()) {
+            return;
+        }
+
+        ServiceState serviceState = mock(ServiceState.class);
+        doReturn(serviceState).when(mTelephonyManager).getServiceState();
+        doReturn(true).when(serviceState).isUsingNonTerrestrialNetwork();
+
+        MmsStats mmsStats = new MmsStats(mContext, mPersistMmsAtomsStorage, 1,
+                mTelephonyManager, null, true);
+        mmsStats.addAtomToStorage(Activity.RESULT_OK);
+
+        ArgumentCaptor<IncomingMms> incomingMmsCaptor = ArgumentCaptor.forClass(IncomingMms.class);
+        verify(mPersistMmsAtomsStorage).addIncomingMms(incomingMmsCaptor.capture());
+        IncomingMms incomingMms = incomingMmsCaptor.getValue();
+        assertThat(incomingMms.getIsNtn()).isEqualTo(true);
+
+        reset(mPersistMmsAtomsStorage);
+        reset(serviceState);
+        doReturn(false).when(serviceState).isUsingNonTerrestrialNetwork();
+
+        mmsStats = new MmsStats(mContext, mPersistMmsAtomsStorage, 1,
+                mTelephonyManager, null, true);
+        mmsStats.addAtomToStorage(Activity.RESULT_OK);
+
+        incomingMmsCaptor = ArgumentCaptor.forClass(IncomingMms.class);
+        verify(mPersistMmsAtomsStorage).addIncomingMms(incomingMmsCaptor.capture());
+        incomingMms = incomingMmsCaptor.getValue();
+        assertThat(incomingMms.getIsNtn()).isEqualTo(false);
+    }
+
+    @Test
+    public void testIsNtn_serviceState_Null() {
+        if (!Flags.carrierEnabledSatelliteFlag()) {
+            return;
+        }
+
+        doReturn(null).when(mTelephonyManager).getServiceState();
+
+        MmsStats mmsStats = new MmsStats(mContext, mPersistMmsAtomsStorage, 1,
+                mTelephonyManager, null, true);
+        mmsStats.addAtomToStorage(Activity.RESULT_OK);
+
+        ArgumentCaptor<IncomingMms> incomingMmsCaptor = ArgumentCaptor.forClass(IncomingMms.class);
+        verify(mPersistMmsAtomsStorage).addIncomingMms(incomingMmsCaptor.capture());
+        IncomingMms incomingMms = incomingMmsCaptor.getValue();
+        assertThat(incomingMms.getIsNtn()).isEqualTo(false);
     }
 }
