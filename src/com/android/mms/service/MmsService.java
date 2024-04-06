@@ -24,6 +24,7 @@ import static com.google.android.mms.pdu.PduHeaders.MESSAGE_TYPE_SEND_REQ;
 import android.annotation.Nullable;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.ContentProvider;
 import android.content.ContentResolver;
 import android.content.ContentUris;
 import android.content.ContentValues;
@@ -1093,6 +1094,11 @@ public class MmsService extends Service implements MmsRequest.RequestManager {
     public int readPduBytesFromContentUri(final Uri contentUri, byte[] pduData) {
         if (contentUri == null) {
             LogUtil.e("Uri is null");
+            return 0;
+        }
+        int contentUriUserID = ContentProvider.getUserIdFromUri(contentUri, UserHandle.myUserId());
+        if (UserHandle.myUserId() != contentUriUserID) {
+            LogUtil.e("Uri is invalid");
             return 0;
         }
         Callable<Integer> copyPduToArray = new Callable<Integer>() {
