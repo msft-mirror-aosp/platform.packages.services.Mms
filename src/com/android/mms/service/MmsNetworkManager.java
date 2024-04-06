@@ -33,7 +33,6 @@ import android.os.Message;
 import android.os.PersistableBundle;
 import android.provider.DeviceConfig;
 import android.telephony.CarrierConfigManager;
-import android.telephony.ServiceState;
 import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
 
@@ -327,31 +326,24 @@ public class MmsNetworkManager {
         mSubId = subId;
         mReleaseHandler = new Handler(Looper.getMainLooper());
 
-        TelephonyManager telephonyManager = mContext.getSystemService(TelephonyManager.class);
-        ServiceState serviceState = null;
-        if (telephonyManager != null) {
-            serviceState = telephonyManager.getServiceState();
-        }
+        NetworkRequest.Builder builder = new NetworkRequest.Builder()
+                .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_MMS)
+                .setNetworkSpecifier(new TelephonyNetworkSpecifier.Builder()
+                        .setSubscriptionId(mSubId).build());
 
-        // During Satellite network , network available is Satellite transport with restricted
-        // capability only . So build mms message network request with related capability
-        if (Flags.carrierEnabledSatelliteFlag()
-                && serviceState != null && serviceState.isUsingNonTerrestrialNetwork()) {
-            mNetworkRequest = new NetworkRequest.Builder()
-                    .addTransportType(NetworkCapabilities.TRANSPORT_SATELLITE)
-                    .addCapability(NetworkCapabilities.NET_CAPABILITY_MMS)
-                    .removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)
-                    .setNetworkSpecifier(new TelephonyNetworkSpecifier.Builder()
-                            .setSubscriptionId(mSubId).build())
-                    .build();
-        } else {
-            mNetworkRequest = new NetworkRequest.Builder()
-                    .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
-                    .addCapability(NetworkCapabilities.NET_CAPABILITY_MMS)
-                    .setNetworkSpecifier(new TelephonyNetworkSpecifier.Builder()
-                            .setSubscriptionId(mSubId).build())
-                    .build();
+        // With Satellite internet support, add satellite transport with restricted capability to
+        // support mms over satellite network
+        if (Flags.satelliteInternet()) {
+            builder.removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED);
+            try {
+                // TODO: b/331622062 remove the try/catch
+                builder.addTransportType(NetworkCapabilities.TRANSPORT_SATELLITE);
+            } catch (IllegalArgumentException exception) {
+                LogUtil.e("TRANSPORT_SATELLITE is not supported.");
+            }
         }
+        mNetworkRequest = builder.build();
 
         mNetworkReleaseTask = new Runnable() {
             @Override
