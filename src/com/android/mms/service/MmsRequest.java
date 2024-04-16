@@ -44,7 +44,6 @@ import com.android.internal.telephony.flags.Flags;
 import com.android.mms.service.exception.ApnException;
 import com.android.mms.service.exception.MmsHttpException;
 import com.android.mms.service.exception.MmsNetworkException;
-import com.android.mms.service.exception.VoluntaryDisconnectMmsHttpException;
 import com.android.mms.service.metrics.MmsStats;
 
 import java.util.UUID;
@@ -177,14 +176,14 @@ public abstract class MmsRequest {
         byte[] response = null;
         int retryId = 0;
         currentState = MmsRequestState.PrepareForHttpRequest;
-        int attemptedTimes = 0;
+
         if (!prepareForHttpRequest()) { // Prepare request, like reading pdu data from user
             LogUtil.e(requestId, "Failed to prepare for request");
             result = SmsManager.MMS_ERROR_IO_ERROR;
         } else { // Execute
             long retryDelaySecs = 2;
             // Try multiple times of MMS HTTP request, depending on the error.
-            while (retryId < RETRY_TIMES) {
+            for (retryId = 0; retryId < RETRY_TIMES; retryId++) {
                 httpStatusCode = 0; // Clear for retry.
                 MonitorTelephonyCallback connectionStateCallback = new MonitorTelephonyCallback();
                 try {
@@ -228,12 +227,8 @@ public abstract class MmsRequest {
                     result = SmsManager.MMS_ERROR_UNABLE_CONNECT_MMS;
                     break;
                 } catch (MmsHttpException e) {
-                    if (e instanceof VoluntaryDisconnectMmsHttpException) {
-                        result = Activity.RESULT_CANCELED;
-                    } else {
-                        LogUtil.e(requestId, "HTTP or network I/O failure", e);
-                        result = SmsManager.MMS_ERROR_HTTP_FAILURE;
-                    }
+                    LogUtil.e(requestId, "HTTP or network I/O failure", e);
+                    result = SmsManager.MMS_ERROR_HTTP_FAILURE;
                     httpStatusCode = e.getStatusCode();
                     // Retry
                 } catch (Exception e) {
@@ -241,34 +236,11 @@ public abstract class MmsRequest {
                     result = SmsManager.MMS_ERROR_UNSPECIFIED;
                     break;
                 } finally {
-                    // Don't release the MMS network if the last attempt was voluntarily
-                    // cancelled (due to better network available), because releasing the request
-                    // could result that network being torn down as it's thought to be useless.
-                    boolean canRelease = false;
-                    if (result != Activity.RESULT_CANCELED) {
-                        retryId++;
-                        canRelease = true;
-                    }
-                    // Otherwise, delay the release for successful download request.
-                    networkManager.releaseNetwork(requestId, canRelease,
-                            this instanceof DownloadRequest && result == Activity.RESULT_OK);
-
+                    // Release the MMS network immediately except successful DownloadRequest.
+                    networkManager.releaseNetwork(requestId,
+                            this instanceof DownloadRequest
+                                    && result == Activity.RESULT_OK);
                     stopListeningToDataConnectionState(connectionStateCallback);
-                }
-
-                // THEORETICALLY WOULDN'T OCCUR - PUTTING HERE AS A SAFETY NET.
-                // TODO: REMOVE WITH FLAG mms_enhancement_enabled after soaking enough time, V-QPR.
-                // Only possible if network kept disconnecting due to Activity.RESULT_CANCELED,
-                // causing retryId doesn't increase and thus stuck in the infinite loop.
-                // However, it's theoretically impossible because RESULT_CANCELED is only triggered
-                // when a WLAN network becomes newly available in addition to an existing network.
-                // Therefore, the WLAN network's own death cannot be triggered by RESULT_CANCELED,
-                // and thus must result in retryId++.
-                if (++attemptedTimes > RETRY_TIMES * 2) {
-                    LogUtil.e(requestId, "Retry is performed too many times");
-                    reportAnomaly("MMS retried too many times",
-                            UUID.fromString("038c9155-5daa-4515-86ae-aafdd33c1435"));
-                    break;
                 }
 
                 if (result != Activity.RESULT_CANCELED) {
