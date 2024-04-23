@@ -208,6 +208,7 @@ public abstract class MmsRequest {
                     }
                     LogUtil.d(requestId, "Using " + apn.toString());
                     if (Flags.carrierEnabledSatelliteFlag()
+                            && networkManager.isSatelliteTransport()
                             && !canTransferPayloadOnCurrentNetwork()) {
                         LogUtil.e(requestId, "PDU too large for satellite");
                         result = SmsManager.MMS_ERROR_TOO_LARGE_FOR_TRANSPORT;
@@ -563,11 +564,6 @@ public abstract class MmsRequest {
             // or when there was an error communicating with the phone process.
             LogUtil.d("canTransferPayloadOnCurrentNetwork serviceState null");
             return true;    // assume we're not connected to a satellite
-        }
-        LogUtil.d("canTransferPayloadOnCurrentNetwork onSatellite: "
-                + serviceState.isUsingNonTerrestrialNetwork());
-        if (!serviceState.isUsingNonTerrestrialNetwork()) {
-            return true;    // not connected to satellite, no size limit
         }
         long payloadSize = getPayloadSize();
         int maxPduSize = mMmsConfig
