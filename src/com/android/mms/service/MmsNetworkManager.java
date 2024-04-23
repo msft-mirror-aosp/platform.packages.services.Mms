@@ -103,6 +103,10 @@ public class MmsNetworkManager {
     private final Dependencies mDeps;
 
     private int mNetworkReleaseTimeoutMillis;
+
+    // satellite transport status of associated mms active network
+    private boolean  mIsSatelliteTransport;
+
     private EventHandler mEventHandler;
 
     private final class EventHandler extends Handler {
@@ -281,6 +285,8 @@ public class MmsNetworkManager {
                         mEventHandler.sendEmptyMessage(EVENT_IWLAN_NETWORK_NEWLY_AVAILABLE);
                     }
                     mIsLastAvailableNetworkIwlan = isWlan;
+                    mIsSatelliteTransport = Flags.satelliteInternet()
+                            && nc.hasTransport(NetworkCapabilities.TRANSPORT_SATELLITE);
                 }
             }
         }
@@ -575,4 +581,15 @@ public class MmsNetworkManager {
     protected int getNetworkReleaseTimeoutMillis() {
         return mNetworkReleaseTimeoutMillis;
     }
+
+    /**
+     * Indicates satellite transport status for active network
+     *
+     * @return {@code true} if satellite transport, otherwise {@code false}
+     */
+    public boolean isSatelliteTransport() {
+        LogUtil.w("satellite transport status: " + mIsSatelliteTransport);
+        return mIsSatelliteTransport;
+    }
+
 }
