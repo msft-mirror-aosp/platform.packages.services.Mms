@@ -33,7 +33,6 @@ import android.os.Message;
 import android.os.PersistableBundle;
 import android.provider.DeviceConfig;
 import android.telephony.CarrierConfigManager;
-import android.telephony.ServiceState;
 import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
 
@@ -46,10 +45,8 @@ import com.android.mms.service.exception.MmsNetworkException;
  * Manages the MMS network connectivity
  */
 public class MmsNetworkManager {
-    /** Device Config Keys */
     private static final String MMS_SERVICE_NETWORK_REQUEST_TIMEOUT_MILLIS =
             "mms_service_network_request_timeout_millis";
-    private static final String MMS_ENHANCEMENT_ENABLED = "mms_enhancement_enabled";
 
     // Default timeout used to call ConnectivityManager.requestNetwork if the
     // MMS_SERVICE_NETWORK_REQUEST_TIMEOUT_MILLIS flag is not set.
@@ -62,8 +59,6 @@ public class MmsNetworkManager {
 
     /* Event created when receiving ACTION_CARRIER_CONFIG_CHANGED */
     private static final int EVENT_CARRIER_CONFIG_CHANGED = 1;
-    /** Event when a WLAN network newly available despite of the existing available one. */
-    private static final int EVENT_IWLAN_NETWORK_NEWLY_AVAILABLE = 2;
 
     private final Context mContext;
 
@@ -71,8 +66,6 @@ public class MmsNetworkManager {
     // We need this when we unbind from it. This is also used to indicate if the
     // MMS network is available.
     private Network mNetwork;
-    /** Whether an Iwlan MMS network is available to use. */
-    private boolean mIsLastAvailableNetworkIwlan;
     // The current count of MMS requests that require the MMS network
     // If mMmsRequestCount is 0, we should release the MMS network.
     private int mMmsRequestCount;
@@ -122,9 +115,6 @@ public class MmsNetworkManager {
                 case EVENT_CARRIER_CONFIG_CHANGED:
                     // Reload mNetworkReleaseTimeoutMillis from CarrierConfigManager.
                     handleCarrierConfigChanged();
-                    break;
-                case EVENT_IWLAN_NETWORK_NEWLY_AVAILABLE:
-                    onIwlanNetworkNewlyAvailable();
                     break;
                 default:
                     LogUtil.e("MmsNetworkManager: ignoring message of unexpected type " + msg.what);
@@ -197,17 +187,6 @@ public class MmsNetworkManager {
         }
     };
 
-    /**
-     * Called when a WLAN network newly available. This new WLAN network should replace the
-     * existing network and retry sending traffic on this network.
-     */
-    private void onIwlanNetworkNewlyAvailable() {
-        if (mMmsHttpClient == null || mNetwork == null) return;
-        LogUtil.d("onIwlanNetworkNewlyAvailable net " + mNetwork.getNetId());
-        mMmsHttpClient.disconnectAllUrlConnections();
-        populateHttpClientWithCurrentNetwork();
-    }
-
     private void handleCarrierConfigChanged() {
         final CarrierConfigManager configManager =
                 (CarrierConfigManager)
@@ -251,13 +230,8 @@ public class MmsNetworkManager {
             // onAvailable will always immediately be followed by a onCapabilitiesChanged. Check
             // network status here is enough.
             super.onCapabilitiesChanged(network, nc);
-            final NetworkInfo networkInfo = getConnectivityManager().getNetworkInfo(network);
-            // wlan network is preferred over wwan network, because its existence meaning it's
-            // recommended by QualifiedNetworksService.
-            final boolean isWlan = networkInfo != null
-                    && networkInfo.getSubtype() == TelephonyManager.NETWORK_TYPE_IWLAN;
             LogUtil.w("NetworkCallbackListener.onCapabilitiesChanged: network="
-                    + network + ", isWlan=" + isWlan + ", nc=" + nc);
+                    + network + ", nc=" + nc);
             synchronized (MmsNetworkManager.this) {
                 final boolean isAvailable =
                         nc.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED);
@@ -270,18 +244,10 @@ public class MmsNetworkManager {
                     return;
                 }
 
-                // Use new available network
-                if (isAvailable) {
-                    if (mNetwork == null) {
-                        mNetwork = network;
-                        MmsNetworkManager.this.notifyAll();
-                    } else if (mDeps.isMmsEnhancementEnabled()
-                            // Iwlan network newly available, try send MMS over the new network.
-                            && !mIsLastAvailableNetworkIwlan && isWlan) {
-                        mNetwork = network;
-                        mEventHandler.sendEmptyMessage(EVENT_IWLAN_NETWORK_NEWLY_AVAILABLE);
-                    }
-                    mIsLastAvailableNetworkIwlan = isWlan;
+                // New available network
+                if (mNetwork == null && isAvailable) {
+                    mNetwork = network;
+                    MmsNetworkManager.this.notifyAll();
                 }
             }
         }
@@ -305,11 +271,6 @@ public class MmsNetworkManager {
                     DEFAULT_MMS_SERVICE_NETWORK_REQUEST_TIMEOUT_MILLIS);
         }
 
-        public boolean isMmsEnhancementEnabled() {
-            return DeviceConfig.getBoolean(
-                    DeviceConfig.NAMESPACE_TELEPHONY, MMS_ENHANCEMENT_ENABLED, true);
-        }
-
         public int getAdditionalNetworkAcquireTimeoutMillis() {
             return ADDITIONAL_NETWORK_ACQUIRE_TIMEOUT_MILLIS;
         }
@@ -327,31 +288,24 @@ public class MmsNetworkManager {
         mSubId = subId;
         mReleaseHandler = new Handler(Looper.getMainLooper());
 
-        TelephonyManager telephonyManager = mContext.getSystemService(TelephonyManager.class);
-        ServiceState serviceState = null;
-        if (telephonyManager != null) {
-            serviceState = telephonyManager.getServiceState();
-        }
+        NetworkRequest.Builder builder = new NetworkRequest.Builder()
+                .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_MMS)
+                .setNetworkSpecifier(new TelephonyNetworkSpecifier.Builder()
+                        .setSubscriptionId(mSubId).build());
 
-        // During Satellite network , network available is Satellite transport with restricted
-        // capability only . So build mms message network request with related capability
-        if (Flags.carrierEnabledSatelliteFlag()
-                && serviceState != null && serviceState.isUsingNonTerrestrialNetwork()) {
-            mNetworkRequest = new NetworkRequest.Builder()
-                    .addTransportType(NetworkCapabilities.TRANSPORT_SATELLITE)
-                    .addCapability(NetworkCapabilities.NET_CAPABILITY_MMS)
-                    .removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)
-                    .setNetworkSpecifier(new TelephonyNetworkSpecifier.Builder()
-                            .setSubscriptionId(mSubId).build())
-                    .build();
-        } else {
-            mNetworkRequest = new NetworkRequest.Builder()
-                    .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
-                    .addCapability(NetworkCapabilities.NET_CAPABILITY_MMS)
-                    .setNetworkSpecifier(new TelephonyNetworkSpecifier.Builder()
-                            .setSubscriptionId(mSubId).build())
-                    .build();
+        // With Satellite internet support, add satellite transport with restricted capability to
+        // support mms over satellite network
+        if (Flags.satelliteInternet()) {
+            builder.removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED);
+            try {
+                // TODO: b/331622062 remove the try/catch
+                builder.addTransportType(NetworkCapabilities.TRANSPORT_SATELLITE);
+            } catch (IllegalArgumentException exception) {
+                LogUtil.e("TRANSPORT_SATELLITE is not supported.");
+            }
         }
+        mNetworkRequest = builder.build();
 
         mNetworkReleaseTask = new Runnable() {
             @Override
@@ -454,22 +408,17 @@ public class MmsNetworkManager {
      * Release the MMS network when nobody is holding on to it.
      *
      * @param requestId          request ID for logging.
-     * @param canRelease         whether the request can be released. An early release of a request
-     *                           can result in unexpected network torn down, as that network is used
-     *                           for immediate retry.
      * @param shouldDelayRelease whether the release should be delayed for a carrier-configured
      *                           timeout (default 5 seconds), the regular use case is to delay this
      *                           for DownloadRequests to use the network for sending an
      *                           acknowledgement on the same network.
      */
-    public void releaseNetwork(final String requestId, final boolean canRelease,
-            final boolean shouldDelayRelease) {
+    public void releaseNetwork(final String requestId, final boolean shouldDelayRelease) {
         synchronized (this) {
             if (mMmsRequestCount > 0) {
                 mMmsRequestCount -= 1;
-                LogUtil.d(requestId, "MmsNetworkManager: release, count=" + mMmsRequestCount
-                        + " canRelease=" + canRelease);
-                if (mMmsRequestCount < 1 && canRelease) {
+                LogUtil.d(requestId, "MmsNetworkManager: release, count=" + mMmsRequestCount);
+                if (mMmsRequestCount < 1) {
                     if (shouldDelayRelease) {
                         // remove previously posted task and post a delayed task on the release
                         // handler to release the network
@@ -544,16 +493,12 @@ public class MmsNetworkManager {
     public MmsHttpClient getOrCreateHttpClient() {
         synchronized (this) {
             if (mMmsHttpClient == null) {
-                populateHttpClientWithCurrentNetwork();
+                if (mNetwork != null) {
+                    // Create new MmsHttpClient for the current Network
+                    mMmsHttpClient = new MmsHttpClient(mContext, mNetwork, mConnectivityManager);
+                }
             }
             return mMmsHttpClient;
-        }
-    }
-
-    // Create new MmsHttpClient for the current Network
-    private void populateHttpClientWithCurrentNetwork() {
-        if (mNetwork != null) {
-            mMmsHttpClient = new MmsHttpClient(mContext, mNetwork, mConnectivityManager);
         }
     }
 
