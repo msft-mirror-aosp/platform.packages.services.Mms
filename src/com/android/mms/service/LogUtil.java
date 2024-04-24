@@ -16,71 +16,72 @@
 
 package com.android.mms.service;
 
-import android.util.Log;
+
+import android.telephony.Rlog;
 
 /**
  * Logging utility
  */
 public class LogUtil {
-    private static final String TAG = "MmsService";
+    public static final String TAG = "MmsService";
 
     public static void i(final String requestId, final String message) {
-        Log.i(TAG, "[" + requestId + "] " + message);
+        Rlog.i(TAG, "[" + requestId + "] " + message);
     }
 
     public static void i(final String message) {
-        Log.i(TAG, message);
+        Rlog.i(TAG, message);
     }
 
     public static void d(final String requestId, final String message) {
-        Log.d(TAG, "[" + requestId + "] " + message);
+        Rlog.d(TAG, "[" + requestId + "] " + message);
     }
 
     public static void d(final String message) {
-        Log.d(TAG, message);
+        Rlog.d(TAG, message);
     }
 
     public static void v(final String requestId, final String message) {
-        Log.v(TAG, "[" + requestId + "] " + message);
+        Rlog.v(TAG, "[" + requestId + "] " + message);
     }
 
     public static void v(final String message) {
-        Log.v(TAG, message);
+        Rlog.v(TAG, message);
     }
 
     public static void e(final String requestId, final String message, final Throwable t) {
-        Log.e(TAG, "[" + requestId + "] " + message, t);
+        Rlog.e(TAG, "[" + requestId + "] " + message, t);
     }
 
     public static void e(final String message, final Throwable t) {
-        Log.e(TAG, message, t);
+        Rlog.e(TAG, message, t);
     }
 
     public static void e(final String requestId, final String message) {
-        Log.e(TAG, "[" + requestId + "] " + message);
+        Rlog.e(TAG, "[" + requestId + "] " + message);
     }
 
     public static void e(final String message) {
-        Log.e(TAG, message);
+        Rlog.e(TAG, message);
     }
 
     public static void w(final String requestId, final String message, final Throwable t) {
-        Log.w(TAG, "[" + requestId + "] " + message, t);
+        Rlog.w(TAG, "[" + requestId + "] " + message, t);
     }
 
     public static void w(final String message, final Throwable t) {
-        Log.w(TAG, message, t);
+        Rlog.w(TAG, message, t);
     }
 
     public static void w(final String requestId, final String message) {
-        Log.w(TAG, "[" + requestId + "] " + message);
+        Rlog.w(TAG, "[" + requestId + "] " + message);
     }
 
     public static void w(final String message) {
-        Log.w(TAG, message);
+        Rlog.w(TAG, message);
     }
 
     public static boolean isLoggable(final int logLevel) {
-        return Log.isLoggable(TAG, logLevel);
+        return Rlog.isLoggable(TAG, logLevel);
     }
 }
