@@ -341,8 +341,9 @@ public class MmsNetworkManager {
      *
      * @param requestId request ID for logging
      * @throws com.android.mms.service.exception.MmsNetworkException if we fail to acquire it
+     * @return The net Id of the acquired network.
      */
-    public void acquireNetwork(final String requestId) throws MmsNetworkException {
+    public int acquireNetwork(final String requestId) throws MmsNetworkException {
         int networkRequestTimeoutMillis = mDeps.getNetworkRequestTimeoutMillis();
 
         synchronized (this) {
@@ -352,7 +353,7 @@ public class MmsNetworkManager {
             if (mNetwork != null) {
                 // Already available
                 LogUtil.d(requestId, "MmsNetworkManager: already available");
-                return;
+                return mNetwork.getNetId();
             }
 
             if (!mSimCardStateChangedReceiverRegistered) {
@@ -390,7 +391,7 @@ public class MmsNetworkManager {
 
             if (mNetwork != null) {
                 // Success
-                return;
+                return mNetwork.getNetId();
             }
 
             if (mNetworkCallback != null) { // Timed out
