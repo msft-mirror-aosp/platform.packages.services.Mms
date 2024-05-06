@@ -38,7 +38,9 @@ import android.telephony.data.ApnSetting;
 import android.telephony.ims.ImsMmTelManager;
 import android.telephony.ims.feature.MmTelFeature;
 import android.telephony.ims.stub.ImsRegistrationImplBase;
+import android.util.SparseArray;
 
+import com.android.internal.annotations.GuardedBy;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.telephony.flags.Flags;
 import com.android.mms.service.exception.ApnException;
@@ -128,18 +130,30 @@ public abstract class MmsRequest {
 
     class MonitorTelephonyCallback extends TelephonyCallback implements
             TelephonyCallback.PreciseDataConnectionStateListener {
+
+        /** The lock to update mNetworkIdToApn. */
+        private final Object mLock = new Object();
+        /**
+         * Track the network agent Id to APN. Usually we have at most 2 networks that are capable of
+         * MMS at the same time (terrestrial and satellite)
+         */
+        @GuardedBy("mLock")
+        private final SparseArray<ApnSetting> mNetworkIdToApn = new SparseArray<>(2);
         @Override
         public void onPreciseDataConnectionStateChanged(
-                PreciseDataConnectionState connectionState) {
-            if (connectionState == null) {
-                return;
-            }
+                @NonNull PreciseDataConnectionState connectionState) {
             ApnSetting apnSetting = connectionState.getApnSetting();
-            int apnTypes = apnSetting.getApnTypeBitmask();
-            if ((apnTypes & ApnSetting.TYPE_MMS) != 0) {
-                mLastConnectionFailure = connectionState.getLastCauseCode();
-                LogUtil.d("onPreciseDataConnectionStateChanged mLastConnectionFailure: "
-                        + mLastConnectionFailure);
+            if (apnSetting != null) {
+                // Only track networks that are capable of MMS.
+                if ((apnSetting.getApnTypeBitmask() & ApnSetting.TYPE_MMS) != 0) {
+                    LogUtil.d("onPreciseDataConnectionStateChanged: " + connectionState);
+                    mLastConnectionFailure = connectionState.getLastCauseCode();
+                    if (Flags.mmsGetApnFromPdsc()) {
+                        synchronized (mLock) {
+                            mNetworkIdToApn.put(connectionState.getNetId(), apnSetting);
+                        }
+                    }
+                }
             }
         }
     }
@@ -189,24 +203,41 @@ public abstract class MmsRequest {
                 try {
                     listenToDataConnectionState(connectionStateCallback);
                     currentState = MmsRequestState.AcquiringNetwork;
-                    networkManager.acquireNetwork(requestId);
-                    final String apnName = networkManager.getApnName();
-                    LogUtil.d(requestId, "APN name is " + apnName);
-                    ApnSettings apn = null;
+                    int networkId = networkManager.acquireNetwork(requestId);
                     currentState = MmsRequestState.LoadingApn;
-                    try {
-                        apn = ApnSettings.load(context, apnName, mSubId, requestId);
-                    } catch (ApnException e) {
-                        // If no APN could be found, fall back to trying without the APN name
-                        if (apnName == null) {
-                            // If the APN name was already null then don't need to retry
-                            throw (e);
+                    ApnSettings apn = null;
+                    ApnSetting networkApn = null;
+                    if (Flags.mmsGetApnFromPdsc()) {
+                        synchronized (connectionStateCallback.mLock) {
+                            networkApn = connectionStateCallback.mNetworkIdToApn.get(networkId);
                         }
-                        LogUtil.i(requestId, "No match with APN name: "
-                                + apnName + ", try with no name");
-                        apn = ApnSettings.load(context, null, mSubId, requestId);
+                        if (networkApn != null) {
+                            apn = ApnSettings.getApnSettingsFromNetworkApn(networkApn);
+                        }
                     }
-                    LogUtil.d(requestId, "Using " + apn.toString());
+                    if (apn == null) {
+                        final String apnName = networkManager.getApnName();
+                        LogUtil.d(requestId, "APN name is " + apnName);
+                        try {
+                            apn = ApnSettings.load(context, apnName, mSubId, requestId);
+                        } catch (ApnException e) {
+                            // If no APN could be found, fall back to trying without the APN name
+                            if (apnName == null) {
+                                // If the APN name was already null then don't need to retry
+                                throw (e);
+                            }
+                            LogUtil.i(requestId, "No match with APN name: "
+                                    + apnName + ", try with no name");
+                            apn = ApnSettings.load(context, null, mSubId, requestId);
+                        }
+                    }
+
+                    if (Flags.mmsGetApnFromPdsc() && networkApn == null && apn != null) {
+                        reportAnomaly("Can't find MMS APN in mms network",
+                                UUID.fromString("2bdda74d-3cf4-44ad-a87f-24c961212a6f"));
+                    }
+
+                    LogUtil.d(requestId, "Using APN " + apn);
                     if (Flags.carrierEnabledSatelliteFlag()
                             && networkManager.isSatelliteTransport()
                             && !canTransferPayloadOnCurrentNetwork()) {
