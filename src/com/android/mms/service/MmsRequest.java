@@ -38,13 +38,14 @@ import android.telephony.data.ApnSetting;
 import android.telephony.ims.ImsMmTelManager;
 import android.telephony.ims.feature.MmTelFeature;
 import android.telephony.ims.stub.ImsRegistrationImplBase;
+import android.util.SparseArray;
 
+import com.android.internal.annotations.GuardedBy;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.telephony.flags.Flags;
 import com.android.mms.service.exception.ApnException;
 import com.android.mms.service.exception.MmsHttpException;
 import com.android.mms.service.exception.MmsNetworkException;
-import com.android.mms.service.exception.VoluntaryDisconnectMmsHttpException;
 import com.android.mms.service.metrics.MmsStats;
 
 import java.util.UUID;
@@ -129,18 +130,30 @@ public abstract class MmsRequest {
 
     class MonitorTelephonyCallback extends TelephonyCallback implements
             TelephonyCallback.PreciseDataConnectionStateListener {
+
+        /** The lock to update mNetworkIdToApn. */
+        private final Object mLock = new Object();
+        /**
+         * Track the network agent Id to APN. Usually we have at most 2 networks that are capable of
+         * MMS at the same time (terrestrial and satellite)
+         */
+        @GuardedBy("mLock")
+        private final SparseArray<ApnSetting> mNetworkIdToApn = new SparseArray<>(2);
         @Override
         public void onPreciseDataConnectionStateChanged(
-                PreciseDataConnectionState connectionState) {
-            if (connectionState == null) {
-                return;
-            }
+                @NonNull PreciseDataConnectionState connectionState) {
             ApnSetting apnSetting = connectionState.getApnSetting();
-            int apnTypes = apnSetting.getApnTypeBitmask();
-            if ((apnTypes & ApnSetting.TYPE_MMS) != 0) {
-                mLastConnectionFailure = connectionState.getLastCauseCode();
-                LogUtil.d("onPreciseDataConnectionStateChanged mLastConnectionFailure: "
-                        + mLastConnectionFailure);
+            if (apnSetting != null) {
+                // Only track networks that are capable of MMS.
+                if ((apnSetting.getApnTypeBitmask() & ApnSetting.TYPE_MMS) != 0) {
+                    LogUtil.d("onPreciseDataConnectionStateChanged: " + connectionState);
+                    mLastConnectionFailure = connectionState.getLastCauseCode();
+                    if (Flags.mmsGetApnFromPdsc()) {
+                        synchronized (mLock) {
+                            mNetworkIdToApn.put(connectionState.getNetId(), apnSetting);
+                        }
+                    }
+                }
             }
         }
     }
@@ -177,38 +190,56 @@ public abstract class MmsRequest {
         byte[] response = null;
         int retryId = 0;
         currentState = MmsRequestState.PrepareForHttpRequest;
-        int attemptedTimes = 0;
+
         if (!prepareForHttpRequest()) { // Prepare request, like reading pdu data from user
             LogUtil.e(requestId, "Failed to prepare for request");
             result = SmsManager.MMS_ERROR_IO_ERROR;
         } else { // Execute
             long retryDelaySecs = 2;
             // Try multiple times of MMS HTTP request, depending on the error.
-            while (retryId < RETRY_TIMES) {
+            for (retryId = 0; retryId < RETRY_TIMES; retryId++) {
                 httpStatusCode = 0; // Clear for retry.
                 MonitorTelephonyCallback connectionStateCallback = new MonitorTelephonyCallback();
                 try {
                     listenToDataConnectionState(connectionStateCallback);
                     currentState = MmsRequestState.AcquiringNetwork;
-                    networkManager.acquireNetwork(requestId);
-                    final String apnName = networkManager.getApnName();
-                    LogUtil.d(requestId, "APN name is " + apnName);
-                    ApnSettings apn = null;
+                    int networkId = networkManager.acquireNetwork(requestId);
                     currentState = MmsRequestState.LoadingApn;
-                    try {
-                        apn = ApnSettings.load(context, apnName, mSubId, requestId);
-                    } catch (ApnException e) {
-                        // If no APN could be found, fall back to trying without the APN name
-                        if (apnName == null) {
-                            // If the APN name was already null then don't need to retry
-                            throw (e);
+                    ApnSettings apn = null;
+                    ApnSetting networkApn = null;
+                    if (Flags.mmsGetApnFromPdsc()) {
+                        synchronized (connectionStateCallback.mLock) {
+                            networkApn = connectionStateCallback.mNetworkIdToApn.get(networkId);
                         }
-                        LogUtil.i(requestId, "No match with APN name: "
-                                + apnName + ", try with no name");
-                        apn = ApnSettings.load(context, null, mSubId, requestId);
+                        if (networkApn != null) {
+                            apn = ApnSettings.getApnSettingsFromNetworkApn(networkApn);
+                        }
                     }
-                    LogUtil.d(requestId, "Using " + apn.toString());
+                    if (apn == null) {
+                        final String apnName = networkManager.getApnName();
+                        LogUtil.d(requestId, "APN name is " + apnName);
+                        try {
+                            apn = ApnSettings.load(context, apnName, mSubId, requestId);
+                        } catch (ApnException e) {
+                            // If no APN could be found, fall back to trying without the APN name
+                            if (apnName == null) {
+                                // If the APN name was already null then don't need to retry
+                                throw (e);
+                            }
+                            LogUtil.i(requestId, "No match with APN name: "
+                                    + apnName + ", try with no name");
+                            apn = ApnSettings.load(context, null, mSubId, requestId);
+                        }
+                    }
+
+                    if (Flags.mmsGetApnFromPdsc() && networkApn == null && apn != null) {
+                        reportAnomaly("Can't find MMS APN in mms network",
+                                UUID.fromString("2bdda74d-3cf4-44ad-a87f-24c961212a6f"));
+                    }
+
+                    LogUtil.d(requestId, "Using APN " + apn);
                     if (Flags.carrierEnabledSatelliteFlag()
+                            && networkManager.isSatelliteTransport()
                             && !canTransferPayloadOnCurrentNetwork()) {
                         LogUtil.e(requestId, "PDU too large for satellite");
                         result = SmsManager.MMS_ERROR_TOO_LARGE_FOR_TRANSPORT;
@@ -228,12 +259,8 @@ public abstract class MmsRequest {
                     result = SmsManager.MMS_ERROR_UNABLE_CONNECT_MMS;
                     break;
                 } catch (MmsHttpException e) {
-                    if (e instanceof VoluntaryDisconnectMmsHttpException) {
-                        result = Activity.RESULT_CANCELED;
-                    } else {
-                        LogUtil.e(requestId, "HTTP or network I/O failure", e);
-                        result = SmsManager.MMS_ERROR_HTTP_FAILURE;
-                    }
+                    LogUtil.e(requestId, "HTTP or network I/O failure", e);
+                    result = SmsManager.MMS_ERROR_HTTP_FAILURE;
                     httpStatusCode = e.getStatusCode();
                     // Retry
                 } catch (Exception e) {
@@ -241,34 +268,11 @@ public abstract class MmsRequest {
                     result = SmsManager.MMS_ERROR_UNSPECIFIED;
                     break;
                 } finally {
-                    // Don't release the MMS network if the last attempt was voluntarily
-                    // cancelled (due to better network available), because releasing the request
-                    // could result that network being torn down as it's thought to be useless.
-                    boolean canRelease = false;
-                    if (result != Activity.RESULT_CANCELED) {
-                        retryId++;
-                        canRelease = true;
-                    }
-                    // Otherwise, delay the release for successful download request.
-                    networkManager.releaseNetwork(requestId, canRelease,
-                            this instanceof DownloadRequest && result == Activity.RESULT_OK);
-
+                    // Release the MMS network immediately except successful DownloadRequest.
+                    networkManager.releaseNetwork(requestId,
+                            this instanceof DownloadRequest
+                                    && result == Activity.RESULT_OK);
                     stopListeningToDataConnectionState(connectionStateCallback);
-                }
-
-                // THEORETICALLY WOULDN'T OCCUR - PUTTING HERE AS A SAFETY NET.
-                // TODO: REMOVE WITH FLAG mms_enhancement_enabled after soaking enough time, V-QPR.
-                // Only possible if network kept disconnecting due to Activity.RESULT_CANCELED,
-                // causing retryId doesn't increase and thus stuck in the infinite loop.
-                // However, it's theoretically impossible because RESULT_CANCELED is only triggered
-                // when a WLAN network becomes newly available in addition to an existing network.
-                // Therefore, the WLAN network's own death cannot be triggered by RESULT_CANCELED,
-                // and thus must result in retryId++.
-                if (++attemptedTimes > RETRY_TIMES * 2) {
-                    LogUtil.e(requestId, "Retry is performed too many times");
-                    reportAnomaly("MMS retried too many times",
-                            UUID.fromString("038c9155-5daa-4515-86ae-aafdd33c1435"));
-                    break;
                 }
 
                 if (result != Activity.RESULT_CANCELED) {
@@ -591,11 +595,6 @@ public abstract class MmsRequest {
             // or when there was an error communicating with the phone process.
             LogUtil.d("canTransferPayloadOnCurrentNetwork serviceState null");
             return true;    // assume we're not connected to a satellite
-        }
-        LogUtil.d("canTransferPayloadOnCurrentNetwork onSatellite: "
-                + serviceState.isUsingNonTerrestrialNetwork());
-        if (!serviceState.isUsingNonTerrestrialNetwork()) {
-            return true;    // not connected to satellite, no size limit
         }
         long payloadSize = getPayloadSize();
         int maxPduSize = mMmsConfig
