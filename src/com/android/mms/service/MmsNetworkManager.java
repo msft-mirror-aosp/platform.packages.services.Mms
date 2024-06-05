@@ -16,6 +16,7 @@
 
 package com.android.mms.service;
 
+import android.annotation.NonNull;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -26,7 +27,6 @@ import android.net.NetworkCapabilities;
 import android.net.NetworkInfo;
 import android.net.NetworkRequest;
 import android.net.TelephonyNetworkSpecifier;
-import android.os.Binder;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
@@ -35,10 +35,10 @@ import android.provider.DeviceConfig;
 import android.telephony.CarrierConfigManager;
 import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
-import android.util.Log;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.telephony.PhoneConstants;
+import com.android.internal.telephony.flags.Flags;
 import com.android.mms.service.exception.MmsNetworkException;
 
 /**
@@ -97,6 +97,10 @@ public class MmsNetworkManager {
     private final Dependencies mDeps;
 
     private int mNetworkReleaseTimeoutMillis;
+
+    // satellite transport status of associated mms active network
+    private boolean  mIsSatelliteTransport;
+
     private EventHandler mEventHandler;
 
     private final class EventHandler extends Handler {
@@ -246,6 +250,8 @@ public class MmsNetworkManager {
 
                 // New available network
                 if (mNetwork == null && isAvailable) {
+                    mIsSatelliteTransport = Flags.satelliteInternet()
+                            && nc.hasTransport(NetworkCapabilities.TRANSPORT_SATELLITE);
                     mNetwork = network;
                     MmsNetworkManager.this.notifyAll();
                 }
@@ -287,12 +293,25 @@ public class MmsNetworkManager {
         mMmsHttpClient = null;
         mSubId = subId;
         mReleaseHandler = new Handler(Looper.getMainLooper());
-        mNetworkRequest = new NetworkRequest.Builder()
+
+        NetworkRequest.Builder builder = new NetworkRequest.Builder()
                 .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
                 .addCapability(NetworkCapabilities.NET_CAPABILITY_MMS)
                 .setNetworkSpecifier(new TelephonyNetworkSpecifier.Builder()
-                        .setSubscriptionId(mSubId).build())
-                .build();
+                        .setSubscriptionId(mSubId).build());
+
+        // With Satellite internet support, add satellite transport with restricted capability to
+        // support mms over satellite network
+        if (Flags.satelliteInternet()) {
+            builder.removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED);
+            try {
+                // TODO: b/331622062 remove the try/catch
+                builder.addTransportType(NetworkCapabilities.TRANSPORT_SATELLITE);
+            } catch (IllegalArgumentException exception) {
+                LogUtil.e("TRANSPORT_SATELLITE is not supported.");
+            }
+        }
+        mNetworkRequest = builder.build();
 
         mNetworkReleaseTask = new Runnable() {
             @Override
@@ -322,8 +341,9 @@ public class MmsNetworkManager {
      *
      * @param requestId request ID for logging
      * @throws com.android.mms.service.exception.MmsNetworkException if we fail to acquire it
+     * @return The net Id of the acquired network.
      */
-    public void acquireNetwork(final String requestId) throws MmsNetworkException {
+    public int acquireNetwork(final String requestId) throws MmsNetworkException {
         int networkRequestTimeoutMillis = mDeps.getNetworkRequestTimeoutMillis();
 
         synchronized (this) {
@@ -333,7 +353,7 @@ public class MmsNetworkManager {
             if (mNetwork != null) {
                 // Already available
                 LogUtil.d(requestId, "MmsNetworkManager: already available");
-                return;
+                return mNetwork.getNetId();
             }
 
             if (!mSimCardStateChangedReceiverRegistered) {
@@ -371,7 +391,7 @@ public class MmsNetworkManager {
 
             if (mNetwork != null) {
                 // Success
-                return;
+                return mNetwork.getNetId();
             }
 
             if (mNetworkCallback != null) { // Timed out
@@ -464,7 +484,7 @@ public class MmsNetworkManager {
         mMmsHttpClient = null;
     }
 
-    private ConnectivityManager getConnectivityManager() {
+    private @NonNull ConnectivityManager getConnectivityManager() {
         if (mConnectivityManager == null) {
             mConnectivityManager = (ConnectivityManager) mContext.getSystemService(
                     Context.CONNECTIVITY_SERVICE);
@@ -515,4 +535,15 @@ public class MmsNetworkManager {
     protected int getNetworkReleaseTimeoutMillis() {
         return mNetworkReleaseTimeoutMillis;
     }
+
+    /**
+     * Indicates satellite transport status for active network
+     *
+     * @return {@code true} if satellite transport, otherwise {@code false}
+     */
+    public boolean isSatelliteTransport() {
+        LogUtil.w("satellite transport status: " + mIsSatelliteTransport);
+        return mIsSatelliteTransport;
+    }
+
 }

@@ -16,6 +16,7 @@
 
 package com.android.mms.service;
 
+import android.annotation.NonNull;
 import android.app.Activity;
 import android.app.PendingIntent;
 import android.content.Context;
@@ -27,7 +28,9 @@ import android.os.Bundle;
 import android.service.carrier.CarrierMessagingService;
 import android.service.carrier.CarrierMessagingServiceWrapper.CarrierMessagingCallback;
 import android.telephony.AnomalyReporter;
+import android.telephony.CarrierConfigManager;
 import android.telephony.PreciseDataConnectionState;
+import android.telephony.ServiceState;
 import android.telephony.SmsManager;
 import android.telephony.TelephonyCallback;
 import android.telephony.TelephonyManager;
@@ -35,13 +38,19 @@ import android.telephony.data.ApnSetting;
 import android.telephony.ims.ImsMmTelManager;
 import android.telephony.ims.feature.MmTelFeature;
 import android.telephony.ims.stub.ImsRegistrationImplBase;
+import android.util.SparseArray;
 
+import com.android.internal.annotations.GuardedBy;
+import com.android.internal.annotations.VisibleForTesting;
+import com.android.internal.telephony.flags.Flags;
 import com.android.mms.service.exception.ApnException;
 import com.android.mms.service.exception.MmsHttpException;
 import com.android.mms.service.exception.MmsNetworkException;
 import com.android.mms.service.metrics.MmsStats;
 
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Base class for MMS requests. This has the common logic of sending/downloading MMS.
@@ -101,27 +110,58 @@ public abstract class MmsRequest {
     protected long mMessageId;
     protected int mLastConnectionFailure;
     private MmsStats mMmsStats;
+    private int result;
+    private int httpStatusCode;
+    protected TelephonyManager mTelephonyManager;
+    @VisibleForTesting
+    public int SATELLITE_MMS_SIZE_LIMIT = 3 * 1024;    // TODO - read from a carrier config setting
+
+    protected enum MmsRequestState {
+        Unknown,
+        Created,
+        PrepareForHttpRequest,
+        AcquiringNetwork,
+        LoadingApn,
+        DoingHttp,
+        Success,
+        Failure
+    };
+    protected MmsRequestState currentState = MmsRequestState.Unknown;
 
     class MonitorTelephonyCallback extends TelephonyCallback implements
             TelephonyCallback.PreciseDataConnectionStateListener {
+
+        /** The lock to update mNetworkIdToApn. */
+        private final Object mLock = new Object();
+        /**
+         * Track the network agent Id to APN. Usually we have at most 2 networks that are capable of
+         * MMS at the same time (terrestrial and satellite)
+         */
+        @GuardedBy("mLock")
+        private final SparseArray<ApnSetting> mNetworkIdToApn = new SparseArray<>(2);
         @Override
         public void onPreciseDataConnectionStateChanged(
-                PreciseDataConnectionState connectionState) {
-            if (connectionState == null) {
-                return;
-            }
+                @NonNull PreciseDataConnectionState connectionState) {
             ApnSetting apnSetting = connectionState.getApnSetting();
-            int apnTypes = apnSetting.getApnTypeBitmask();
-            if ((apnTypes & ApnSetting.TYPE_MMS) != 0) {
-                mLastConnectionFailure = connectionState.getLastCauseCode();
-                LogUtil.d("onPreciseDataConnectionStateChanged mLastConnectionFailure: "
-                        + mLastConnectionFailure);
+            if (apnSetting != null) {
+                // Only track networks that are capable of MMS.
+                if ((apnSetting.getApnTypeBitmask() & ApnSetting.TYPE_MMS) != 0) {
+                    LogUtil.d("onPreciseDataConnectionStateChanged: " + connectionState);
+                    mLastConnectionFailure = connectionState.getLastCauseCode();
+                    if (Flags.mmsGetApnFromPdsc()) {
+                        synchronized (mLock) {
+                            mNetworkIdToApn.put(connectionState.getNetId(), apnSetting);
+                        }
+                    }
+                }
             }
         }
     }
 
     public MmsRequest(RequestManager requestManager, int subId, String creator,
-            Bundle mmsConfig, Context context, long messageId, MmsStats mmsStats) {
+            Bundle mmsConfig, Context context, long messageId, MmsStats mmsStats,
+            TelephonyManager telephonyManager) {
+        currentState = MmsRequestState.Created;
         mRequestManager = requestManager;
         mSubId = subId;
         mCreator = creator;
@@ -129,6 +169,7 @@ public abstract class MmsRequest {
         mContext = context;
         mMessageId = messageId;
         mMmsStats = mmsStats;
+        mTelephonyManager = telephonyManager;
     }
 
     public int getSubId() {
@@ -144,12 +185,12 @@ public abstract class MmsRequest {
     public void execute(Context context, MmsNetworkManager networkManager) {
         final String requestId = this.getRequestId();
         LogUtil.i(requestId, "Executing...");
-        int result = SmsManager.MMS_ERROR_UNSPECIFIED;
-        int httpStatusCode = 0;
+        result = SmsManager.MMS_ERROR_UNSPECIFIED;
+        httpStatusCode = 0;
         byte[] response = null;
         int retryId = 0;
-        // TODO: add mms data channel check back to fast fail if no way to send mms,
-        // when telephony provides such API.
+        currentState = MmsRequestState.PrepareForHttpRequest;
+
         if (!prepareForHttpRequest()) { // Prepare request, like reading pdu data from user
             LogUtil.e(requestId, "Failed to prepare for request");
             result = SmsManager.MMS_ERROR_IO_ERROR;
@@ -161,11 +202,22 @@ public abstract class MmsRequest {
                 MonitorTelephonyCallback connectionStateCallback = new MonitorTelephonyCallback();
                 try {
                     listenToDataConnectionState(connectionStateCallback);
-                    networkManager.acquireNetwork(requestId);
-                    final String apnName = networkManager.getApnName();
-                    LogUtil.d(requestId, "APN name is " + apnName);
-                    try {
-                        ApnSettings apn = null;
+                    currentState = MmsRequestState.AcquiringNetwork;
+                    int networkId = networkManager.acquireNetwork(requestId);
+                    currentState = MmsRequestState.LoadingApn;
+                    ApnSettings apn = null;
+                    ApnSetting networkApn = null;
+                    if (Flags.mmsGetApnFromPdsc()) {
+                        synchronized (connectionStateCallback.mLock) {
+                            networkApn = connectionStateCallback.mNetworkIdToApn.get(networkId);
+                        }
+                        if (networkApn != null) {
+                            apn = ApnSettings.getApnSettingsFromNetworkApn(networkApn);
+                        }
+                    }
+                    if (apn == null) {
+                        final String apnName = networkManager.getApnName();
+                        LogUtil.d(requestId, "APN name is " + apnName);
                         try {
                             apn = ApnSettings.load(context, apnName, mSubId, requestId);
                         } catch (ApnException e) {
@@ -178,16 +230,26 @@ public abstract class MmsRequest {
                                     + apnName + ", try with no name");
                             apn = ApnSettings.load(context, null, mSubId, requestId);
                         }
-                        LogUtil.i(requestId, "Using " + apn.toString());
-                        response = doHttp(context, networkManager, apn);
-                        result = Activity.RESULT_OK;
-                        // Success
-                        break;
-                    } finally {
-                        // Release the MMS network immediately except successful DownloadRequest.
-                        networkManager.releaseNetwork(requestId,
-                                this instanceof DownloadRequest && result == Activity.RESULT_OK);
                     }
+
+                    if (Flags.mmsGetApnFromPdsc() && networkApn == null && apn != null) {
+                        reportAnomaly("Can't find MMS APN in mms network",
+                                UUID.fromString("2bdda74d-3cf4-44ad-a87f-24c961212a6f"));
+                    }
+
+                    LogUtil.d(requestId, "Using APN " + apn);
+                    if (Flags.carrierEnabledSatelliteFlag()
+                            && networkManager.isSatelliteTransport()
+                            && !canTransferPayloadOnCurrentNetwork()) {
+                        LogUtil.e(requestId, "PDU too large for satellite");
+                        result = SmsManager.MMS_ERROR_TOO_LARGE_FOR_TRANSPORT;
+                        break;
+                    }
+                    currentState = MmsRequestState.DoingHttp;
+                    response = doHttp(context, networkManager, apn);
+                    result = Activity.RESULT_OK;
+                    // Success
+                    break;
                 } catch (ApnException e) {
                     LogUtil.e(requestId, "APN failure", e);
                     result = SmsManager.MMS_ERROR_INVALID_APN;
@@ -206,12 +268,20 @@ public abstract class MmsRequest {
                     result = SmsManager.MMS_ERROR_UNSPECIFIED;
                     break;
                 } finally {
+                    // Release the MMS network immediately except successful DownloadRequest.
+                    networkManager.releaseNetwork(requestId,
+                            this instanceof DownloadRequest
+                                    && result == Activity.RESULT_OK);
                     stopListeningToDataConnectionState(connectionStateCallback);
                 }
-                try {
-                    Thread.sleep(retryDelaySecs * 1000, 0/*nano*/);
-                } catch (InterruptedException e) {}
-                retryDelaySecs <<= 1;
+
+                if (result != Activity.RESULT_CANCELED) {
+                    try { // Cool down retry if the previous attempt wasn't voluntarily cancelled.
+                        new CountDownLatch(1).await(retryDelaySecs, TimeUnit.SECONDS);
+                    } catch (InterruptedException e) { }
+                    // Double the cool down time if the next try fails again.
+                    retryDelaySecs <<= 1;
+                }
             }
         }
         processResult(context, result, response, httpStatusCode, /* handledByCarrierApp= */ false,
@@ -251,6 +321,8 @@ public abstract class MmsRequest {
         final Uri messageUri = persistIfRequired(context, result, response);
 
         final String requestId = this.getRequestId();
+        currentState = result == Activity.RESULT_OK ? MmsRequestState.Success
+                : MmsRequestState.Failure;
         // As noted in the @param comment above, the httpStatusCode is only set when there's
         // an http failure. On success, such as an http code of 200, the value here will be 0.
         // "httpStatusCode: xxx" is now reported for an http failure only.
@@ -284,7 +356,7 @@ public abstract class MmsRequest {
                 }
                 reportPossibleAnomaly(result, httpStatusCode);
                 pendingIntent.send(context, result, fillIn);
-                mMmsStats.addAtomToStorage(result, retryId, handledByCarrierApp);
+                mMmsStats.addAtomToStorage(result, retryId, handledByCarrierApp, mMessageId);
             } catch (PendingIntent.CanceledException e) {
                 LogUtil.e(requestId, "Sending pending intent canceled", e);
             }
@@ -307,16 +379,22 @@ public abstract class MmsRequest {
                 String message = "MMS failed";
                 LogUtil.i(this.toString(),
                         message + " with error: " + result + " httpStatus:" + httpStatusCode);
-                TelephonyManager telephonyManager =
-                        mContext.getSystemService(TelephonyManager.class)
-                                .createForSubscriptionId(mSubId);
-                AnomalyReporter.reportAnomaly(
-                        generateUUID(result, httpStatusCode),
-                        message,
-                        telephonyManager.getSimCarrierId());
+                reportAnomaly(message, generateUUID(result, httpStatusCode));
                 break;
             default:
                 break;
+        }
+    }
+
+    private void reportAnomaly(@NonNull String anomalyMsg, @NonNull UUID uuid) {
+        TelephonyManager telephonyManager =
+                mContext.getSystemService(TelephonyManager.class)
+                        .createForSubscriptionId(mSubId);
+        if (telephonyManager != null) {
+            AnomalyReporter.reportAnomaly(
+                    uuid,
+                    anomalyMsg,
+                    telephonyManager.getSimCarrierId());
         }
     }
 
@@ -409,7 +487,10 @@ public abstract class MmsRequest {
     @Override
     public String toString() {
         return getClass().getSimpleName() + '@' + Integer.toHexString(hashCode())
-                + " " + MmsService.formatCrossStackMessageId(mMessageId);
+                + " " + MmsService.formatCrossStackMessageId(mMessageId)
+                + " subId: " + mSubId
+                + " currentState: \"" + currentState.name() + "\""
+                + " result: " + result;
     }
 
     protected String getRequestId() {
@@ -495,5 +576,31 @@ public abstract class MmsRequest {
                     + MmsService.formatCrossStackMessageId(mMessageId)
                     + " with result: " + result);
         }
+    }
+
+    /**
+     * Get the size of the pdu to send or download.
+     */
+    protected abstract long getPayloadSize();
+
+    /**
+     * Determine whether the send or to-be-downloaded pdu is within size limits for the
+     * current connection.
+     */
+    @VisibleForTesting
+    public boolean canTransferPayloadOnCurrentNetwork() {
+        ServiceState serviceState = mTelephonyManager.getServiceState();
+        if (serviceState == null) {
+            // serviceState can be null when the subscription is inactive
+            // or when there was an error communicating with the phone process.
+            LogUtil.d("canTransferPayloadOnCurrentNetwork serviceState null");
+            return true;    // assume we're not connected to a satellite
+        }
+        long payloadSize = getPayloadSize();
+        int maxPduSize = mMmsConfig
+                .getInt(CarrierConfigManager.KEY_MMS_MAX_NTN_PAYLOAD_SIZE_BYTES_INT);
+        LogUtil.d("canTransferPayloadOnCurrentNetwork payloadSize: " + payloadSize
+                + " maxPduSize: " + maxPduSize);
+        return payloadSize > 0 && payloadSize <= maxPduSize;
     }
 }

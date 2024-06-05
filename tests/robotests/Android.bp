@@ -3,6 +3,7 @@
 //############################################################
 
 package {
+    default_team: "trendy_team_fwk_telephony",
     default_applicable_licenses: ["Android-Apache-2.0"],
 }
 
@@ -20,4 +21,6 @@ android_robolectric_test {
 
     instrumentation_for: "MmsService",
     upstream: true,
+
+    strict_mode: false,
 }

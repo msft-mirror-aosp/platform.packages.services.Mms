@@ -29,6 +29,7 @@ import android.text.TextUtils;
 import android.util.Base64;
 import android.util.Log;
 
+import com.android.internal.annotations.VisibleForTesting;
 import com.android.mms.service.exception.MmsHttpException;
 
 import java.io.BufferedInputStream;
@@ -51,8 +52,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-
-import com.android.internal.annotations.VisibleForTesting;
 
 /**
  * MMS HTTP client for sending and downloading MMS messages

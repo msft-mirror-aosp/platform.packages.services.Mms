@@ -18,18 +18,17 @@ package com.android.mms.service;
 
 import static com.google.common.truth.Truth.assertThat;
 
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import android.content.Context;
-import android.net.ConnectivityManager;
-import android.net.Network;
 import android.os.Bundle;
-import android.telephony.ServiceState;
 import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
 
@@ -37,14 +36,8 @@ import androidx.test.core.app.ApplicationProvider;
 
 import org.junit.After;
 import org.junit.Before;
-import org.mockito.MockitoAnnotations;
-import org.mockito.Spy;
 import org.junit.Test;
-
-import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.Mockito.reset;
-
-import android.util.Log;
+import org.mockito.MockitoAnnotations;
 
 public class MmsHttpClientTest {
     // Mocked classes
