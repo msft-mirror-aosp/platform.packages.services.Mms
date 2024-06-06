@@ -39,6 +39,7 @@ android_app {
     platform_apis: true,
     privileged: true,
     srcs: ["src/**/*.java"],
+    libs: ["telephony-common"],
     resource_dirs: ["res"],
     aaptflags: ["--auto-add-overlay"],
     optimize: {
