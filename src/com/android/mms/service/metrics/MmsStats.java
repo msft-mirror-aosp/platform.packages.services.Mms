@@ -37,6 +37,7 @@ import android.util.Log;
 
 import com.android.internal.telephony.SmsApplication;
 import com.android.internal.telephony.flags.Flags;
+import com.android.internal.telephony.satellite.metrics.CarrierRoamingSatelliteSessionStats;
 import com.android.mms.IncomingMms;
 import com.android.mms.OutgoingMms;
 
@@ -73,17 +74,23 @@ public class MmsStats {
 
     /** Adds incoming or outgoing mms atom to storage. */
     public void addAtomToStorage(int result) {
-        addAtomToStorage(result, 0, false);
+        addAtomToStorage(result, 0, false, 0);
     }
 
     /** Adds incoming or outgoing mms atom to storage. */
-    public void addAtomToStorage(int result, int retryId, boolean handledByCarrierApp) {
+    public void addAtomToStorage(int result, int retryId, boolean handledByCarrierApp,
+            long mMessageId) {
         long identity = Binder.clearCallingIdentity();
         try {
             if (mIsIncomingMms) {
                 onIncomingMms(result, retryId, handledByCarrierApp);
             } else {
                 onOutgoingMms(result, retryId, handledByCarrierApp);
+            }
+            if (isUsingNonTerrestrialNetwork()) {
+                CarrierRoamingSatelliteSessionStats carrierRoamingSatelliteSessionStats =
+                        CarrierRoamingSatelliteSessionStats.getInstance(mSubId);
+                carrierRoamingSatelliteSessionStats.onMms(mIsIncomingMms, mMessageId);
             }
         } finally {
             Binder.restoreCallingIdentity(identity);
