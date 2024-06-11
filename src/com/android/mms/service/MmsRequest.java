@@ -356,7 +356,7 @@ public abstract class MmsRequest {
                 }
                 reportPossibleAnomaly(result, httpStatusCode);
                 pendingIntent.send(context, result, fillIn);
-                mMmsStats.addAtomToStorage(result, retryId, handledByCarrierApp);
+                mMmsStats.addAtomToStorage(result, retryId, handledByCarrierApp, mMessageId);
             } catch (PendingIntent.CanceledException e) {
                 LogUtil.e(requestId, "Sending pending intent canceled", e);
             }
