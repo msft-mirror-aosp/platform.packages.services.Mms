@@ -307,8 +307,10 @@ public class MmsNetworkManager {
             try {
                 // TODO: b/331622062 remove the try/catch
                 builder.addTransportType(NetworkCapabilities.TRANSPORT_SATELLITE);
+                builder.removeCapability(NetworkCapabilities
+                        .NET_CAPABILITY_NOT_BANDWIDTH_CONSTRAINED);
             } catch (IllegalArgumentException exception) {
-                LogUtil.e("TRANSPORT_SATELLITE is not supported.");
+                LogUtil.e("TRANSPORT_SATELLITE or NOT_BANDWIDTH_CONSTRAINED is not supported.");
             }
         }
         mNetworkRequest = builder.build();
