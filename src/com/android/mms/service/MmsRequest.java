@@ -28,7 +28,9 @@ import android.os.Bundle;
 import android.service.carrier.CarrierMessagingService;
 import android.service.carrier.CarrierMessagingServiceWrapper.CarrierMessagingCallback;
 import android.telephony.AnomalyReporter;
+import android.telephony.CarrierConfigManager;
 import android.telephony.PreciseDataConnectionState;
+import android.telephony.ServiceState;
 import android.telephony.SmsManager;
 import android.telephony.TelephonyCallback;
 import android.telephony.TelephonyManager;
@@ -37,6 +39,8 @@ import android.telephony.ims.ImsMmTelManager;
 import android.telephony.ims.feature.MmTelFeature;
 import android.telephony.ims.stub.ImsRegistrationImplBase;
 
+import com.android.internal.annotations.VisibleForTesting;
+import com.android.internal.telephony.flags.Flags;
 import com.android.mms.service.exception.ApnException;
 import com.android.mms.service.exception.MmsHttpException;
 import com.android.mms.service.exception.MmsNetworkException;
@@ -107,6 +111,9 @@ public abstract class MmsRequest {
     private MmsStats mMmsStats;
     private int result;
     private int httpStatusCode;
+    protected TelephonyManager mTelephonyManager;
+    @VisibleForTesting
+    public int SATELLITE_MMS_SIZE_LIMIT = 3 * 1024;    // TODO - read from a carrier config setting
 
     protected enum MmsRequestState {
         Unknown,
@@ -139,7 +146,8 @@ public abstract class MmsRequest {
     }
 
     public MmsRequest(RequestManager requestManager, int subId, String creator,
-            Bundle mmsConfig, Context context, long messageId, MmsStats mmsStats) {
+            Bundle mmsConfig, Context context, long messageId, MmsStats mmsStats,
+            TelephonyManager telephonyManager) {
         currentState = MmsRequestState.Created;
         mRequestManager = requestManager;
         mSubId = subId;
@@ -148,6 +156,7 @@ public abstract class MmsRequest {
         mContext = context;
         mMessageId = messageId;
         mMmsStats = mmsStats;
+        mTelephonyManager = telephonyManager;
     }
 
     public int getSubId() {
@@ -198,7 +207,13 @@ public abstract class MmsRequest {
                                 + apnName + ", try with no name");
                         apn = ApnSettings.load(context, null, mSubId, requestId);
                     }
-                    LogUtil.i(requestId, "Using " + apn.toString());
+                    LogUtil.d(requestId, "Using " + apn.toString());
+                    if (Flags.carrierEnabledSatelliteFlag()
+                            && !canTransferPayloadOnCurrentNetwork()) {
+                        LogUtil.e(requestId, "PDU too large for satellite");
+                        result = SmsManager.MMS_ERROR_TOO_LARGE_FOR_TRANSPORT;
+                        break;
+                    }
                     currentState = MmsRequestState.DoingHttp;
                     response = doHttp(context, networkManager, apn);
                     result = Activity.RESULT_OK;
@@ -557,5 +572,36 @@ public abstract class MmsRequest {
                     + MmsService.formatCrossStackMessageId(mMessageId)
                     + " with result: " + result);
         }
+    }
+
+    /**
+     * Get the size of the pdu to send or download.
+     */
+    protected abstract long getPayloadSize();
+
+    /**
+     * Determine whether the send or to-be-downloaded pdu is within size limits for the
+     * current connection.
+     */
+    @VisibleForTesting
+    public boolean canTransferPayloadOnCurrentNetwork() {
+        ServiceState serviceState = mTelephonyManager.getServiceState();
+        if (serviceState == null) {
+            // serviceState can be null when the subscription is inactive
+            // or when there was an error communicating with the phone process.
+            LogUtil.d("canTransferPayloadOnCurrentNetwork serviceState null");
+            return true;    // assume we're not connected to a satellite
+        }
+        LogUtil.d("canTransferPayloadOnCurrentNetwork onSatellite: "
+                + serviceState.isUsingNonTerrestrialNetwork());
+        if (!serviceState.isUsingNonTerrestrialNetwork()) {
+            return true;    // not connected to satellite, no size limit
+        }
+        long payloadSize = getPayloadSize();
+        int maxPduSize = mMmsConfig
+                .getInt(CarrierConfigManager.KEY_MMS_MAX_NTN_PAYLOAD_SIZE_BYTES_INT);
+        LogUtil.d("canTransferPayloadOnCurrentNetwork payloadSize: " + payloadSize
+                + " maxPduSize: " + maxPduSize);
+        return payloadSize > 0 && payloadSize <= maxPduSize;
     }
 }
