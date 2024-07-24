@@ -35,6 +35,7 @@ import android.provider.Telephony;
 import android.service.carrier.CarrierMessagingService;
 import android.service.carrier.CarrierMessagingServiceWrapper;
 import android.telephony.SmsManager;
+import android.telephony.TelephonyManager;
 import android.text.TextUtils;
 
 import com.android.mms.service.exception.MmsHttpException;
@@ -61,8 +62,10 @@ public class DownloadRequest extends MmsRequest {
 
     public DownloadRequest(RequestManager manager, int subId, String locationUrl,
             Uri contentUri, PendingIntent downloadedIntent, String creator,
-            Bundle configOverrides, Context context, long messageId, MmsStats mmsStats) {
-        super(manager, subId, creator, configOverrides, context, messageId, mmsStats);
+            Bundle configOverrides, Context context, long messageId, MmsStats mmsStats,
+            TelephonyManager telephonyManager) {
+        super(manager, subId, creator, configOverrides, context, messageId, mmsStats,
+                telephonyManager);
         mLocationUrl = locationUrl;
         mDownloadedIntent = downloadedIntent;
         mContentUri = contentUri;
@@ -357,5 +360,18 @@ public class DownloadRequest extends MmsRequest {
                         0/* httpStatusCode */, /* handledByCarrierApp= */ true);
             }
         }
+    }
+
+    protected long getPayloadSize() {
+        long wapSize = 0;
+        try {
+            wapSize = SmsManager.getSmsManagerForSubscriptionId(mSubId)
+                    .getWapMessageSize(mLocationUrl);
+        } catch (java.util.NoSuchElementException e) {
+            // The download url wasn't found in the wap push cache. Since we're connected to
+            // a satellite and don't know the size of the download, block the download with a
+            // wapSize of 0.
+        }
+        return wapSize;
     }
 }
