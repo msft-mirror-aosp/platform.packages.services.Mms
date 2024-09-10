@@ -16,6 +16,8 @@
 
 package com.android.mms.service;
 
+import android.annotation.NonNull;
+import android.annotation.Nullable;
 import android.content.Context;
 import android.database.Cursor;
 import android.net.Uri;
@@ -158,6 +160,31 @@ public class ApnSettings {
         return null;
     }
 
+    /**
+     * Convert the APN received from network to an APN used by MMS to make http request. Essentially
+     * the same as {@link #getApnSettingsFromCursor}.
+     * @param apn network APN for setup network.
+     * @return APN to make http request.
+     */
+    @Nullable
+    public static ApnSettings getApnSettingsFromNetworkApn(@NonNull ApnSetting apn) {
+        // Default proxy port to 80
+        int proxyPort = 80;
+        // URL
+        if (apn.getMmsc() == null) return null;
+        String mmscUrl = apn.getMmsc().toString().trim();
+        if (TextUtils.isEmpty(mmscUrl)) return null;
+        // proxy address
+        String proxy = trimWithNullCheck(apn.getMmsProxyAddressAsString());
+        if (!TextUtils.isEmpty(proxy)) {
+            proxy = Inet4AddressUtils.trimAddressZeros(proxy);
+            // proxy port
+            if (apn.getMmsProxyPort() != -1 /*UNSPECIFIED_INT*/) proxyPort = apn.getMmsProxyPort();
+        }
+
+        return new ApnSettings(mmscUrl, proxy, proxyPort, apn.toString());
+    }
+
     private static String getDebugText(Cursor cursor) {
         final StringBuilder sb = new StringBuilder();
         sb.append("APN [");
@@ -217,7 +244,8 @@ public class ApnSettings {
         return false;
     }
 
+    @Override
     public String toString() {
-        return mDebugText;
+        return mServiceCenter + " " + mProxyAddress + " " + mProxyPort + " " + mDebugText;
     }
 }
