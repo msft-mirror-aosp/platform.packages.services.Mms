@@ -43,6 +43,11 @@ import java.util.Arrays;
 
 @RunWith(RobolectricTestRunner.class)
 public final class ApnSettingsTest {
+    private static final String APN_NAME = "mms.com";
+    private static final String ENTRY_NAME = "mms apn";
+    private static final String URI = "mmscUrl";
+    private static final String ADDRESS = "mmsProxyAddress";
+    private static final int PORT = 15;
 
     private Context context;
 
@@ -92,6 +97,42 @@ public final class ApnSettingsTest {
 
         ShadowContentResolver.registerProviderInternal(
                 Telephony.Carriers.CONTENT_URI.getAuthority(), new FakeApnSettingsProvider(cursor));
+    }
+
+    @Test
+    public void getApnSettingsFromNetworkApn_normal() {
+        ApnSetting networkApn = new ApnSetting.Builder().setApnName(APN_NAME)
+                .setEntryName(ENTRY_NAME)
+                .setApnTypeBitmask(ApnSetting.TYPE_MMS)
+                .setMmsc(Uri.parse(URI))
+                .setMmsProxyPort(PORT)
+                .setMmsProxyAddress(ADDRESS).build();
+        ApnSettings apnSettings = ApnSettings.getApnSettingsFromNetworkApn(networkApn);
+        assertThat(apnSettings.getMmscUrl()).isEqualTo(URI);
+        assertThat(apnSettings.getProxyPort()).isEqualTo(PORT);
+        assertThat(apnSettings.getProxyAddress()).isEqualTo(ADDRESS);
+    }
+
+    @Test
+    public void getApnSettingsFromNetworkApn_emptyMmsUrl_returnEmpty() {
+        ApnSetting networkApn = new ApnSetting.Builder().setApnName(APN_NAME)
+                .setEntryName(ENTRY_NAME)
+                .setApnTypeBitmask(ApnSetting.TYPE_MMS)
+                .setMmsProxyPort(PORT)
+                .setMmsProxyAddress(ADDRESS).build();
+        ApnSettings apnSettings = ApnSettings.getApnSettingsFromNetworkApn(networkApn);
+        assertThat(apnSettings).isNull();
+    }
+
+    @Test
+    public void getApnSettingsFromNetworkApn_nullMmsPort_defaultProxyPortUsed() {
+        ApnSetting networkApn = new ApnSetting.Builder().setApnName(APN_NAME)
+                .setEntryName(ENTRY_NAME)
+                .setApnTypeBitmask(ApnSetting.TYPE_MMS)
+                .setMmsc(Uri.parse(URI))
+                .setMmsProxyAddress(ADDRESS).build();
+        ApnSettings apnSettings = ApnSettings.getApnSettingsFromNetworkApn(networkApn);
+        assertThat(apnSettings.getProxyPort()).isEqualTo(80);
     }
 
     private final class FakeApnSettingsProvider extends ContentProvider {

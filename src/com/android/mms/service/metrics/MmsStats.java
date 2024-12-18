@@ -33,9 +33,11 @@ import android.telephony.SubscriptionInfo;
 import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
 import android.telephony.UiccCardInfo;
+import android.util.Log;
 
 import com.android.internal.telephony.SmsApplication;
 import com.android.internal.telephony.flags.Flags;
+import com.android.internal.telephony.satellite.metrics.CarrierRoamingSatelliteSessionStats;
 import com.android.mms.IncomingMms;
 import com.android.mms.OutgoingMms;
 
@@ -72,17 +74,23 @@ public class MmsStats {
 
     /** Adds incoming or outgoing mms atom to storage. */
     public void addAtomToStorage(int result) {
-        addAtomToStorage(result, 0, false);
+        addAtomToStorage(result, 0, false, 0);
     }
 
     /** Adds incoming or outgoing mms atom to storage. */
-    public void addAtomToStorage(int result, int retryId, boolean handledByCarrierApp) {
+    public void addAtomToStorage(int result, int retryId, boolean handledByCarrierApp,
+            long mMessageId) {
         long identity = Binder.clearCallingIdentity();
         try {
             if (mIsIncomingMms) {
                 onIncomingMms(result, retryId, handledByCarrierApp);
             } else {
                 onOutgoingMms(result, retryId, handledByCarrierApp);
+            }
+            if (isUsingNonTerrestrialNetwork()) {
+                CarrierRoamingSatelliteSessionStats carrierRoamingSatelliteSessionStats =
+                        CarrierRoamingSatelliteSessionStats.getInstance(mSubId);
+                carrierRoamingSatelliteSessionStats.onMms(mIsIncomingMms, mMessageId);
             }
         } finally {
             Binder.restoreCallingIdentity(identity);
@@ -104,6 +112,7 @@ public class MmsStats {
                 .setRetryId(retryId)
                 .setHandledByCarrierApp(handledByCarrierApp)
                 .setIsManagedProfile(isManagedProfile())
+                .setIsNtn(isUsingNonTerrestrialNetwork())
                 .build();
         mPersistMmsAtomsStorage.addIncomingMms(incomingMms);
     }
@@ -124,6 +133,7 @@ public class MmsStats {
                 .setRetryId(retryId)
                 .setHandledByCarrierApp(handledByCarrierApp)
                 .setIsManagedProfile(isManagedProfile())
+                .setIsNtn(isUsingNonTerrestrialNetwork())
                 .build();
         mPersistMmsAtomsStorage.addOutgoingMms(outgoingMms);
     }
@@ -222,6 +232,21 @@ public class MmsStats {
             userHandle = subManager.getSubscriptionUserHandle(mSubId);
         }
         return SmsApplication.isDefaultMmsApplicationAsUser(mContext, mCallingPkg, userHandle);
+    }
+
+    /** Determines whether device is non-terrestrial network or not. */
+    private boolean isUsingNonTerrestrialNetwork() {
+        if (!Flags.carrierEnabledSatelliteFlag()) {
+            return false;
+        }
+
+        ServiceState ss = mTelephonyManager.getServiceState();
+        if (ss != null) {
+            return ss.isUsingNonTerrestrialNetwork();
+        } else {
+            Log.e(TAG, "isUsingNonTerrestrialNetwork(): ServiceState is null");
+        }
+        return false;
     }
 
     /**
